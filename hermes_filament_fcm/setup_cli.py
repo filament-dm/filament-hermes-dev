@@ -295,6 +295,67 @@ def _run_interactive_setup() -> bool:
     return True
 
 
+def _persist(token: str, url: str, principal_id: str | None) -> None:
+    """Write the validated connection to the engine's .env.
+
+    Seeds FILAMENT_CONTROL_USERS with the principal, which is the platform's
+    allowed_users_env. The owner then reaches the agent from the first message,
+    with no `hermes pairing approve` step.
+    """
+    save_env_value("FILAMENT_MCP_TOKEN", token)
+    save_env_value("FILAMENT_MCP_URL", url)
+    if principal_id:
+        save_env_value("FILAMENT_CONTROL_USERS", principal_id)
+    else:
+        remove_env_value("FILAMENT_CONTROL_USERS")
+        print_warning(
+            "Could not determine the principal (owner) from the token. Run "
+            "`hermes pairing approve` once, or set FILAMENT_CONTROL_USERS."
+        )
+
+
+def connect(token: str, url: str | None = None, restart: bool = True) -> int:
+    """Connect this agent to Filament with *token*. Returns an exit code.
+
+    The non-interactive path behind ``hermes filament connect <token>``. It
+    replaces the token prompt that ``hermes plugins install`` raises from
+    ``requires_env``, so the whole install is two commands with no prompt:
+
+        hermes plugins install filament-dm/filament-hermes --enable
+        hermes filament connect fmcp_...
+
+    Unlike the prompt, this overwrites an existing token, so it is also the
+    reconnect path. It blocks while the agent is reserved — the user may still
+    be naming the agent in the app — and connects as soon as that finishes.
+    """
+    token = (token or "").strip()
+    if not token:
+        print_warning("A token is required. Copy it from Filament's connect flow.")
+        return 2
+
+    resolved = (
+        url or get_env_value("FILAMENT_MCP_URL") or "https://api.filament.dm/mcp/agents"
+    ).strip().rstrip("/")
+
+    print_header("Filament (FCM)")
+    _enable_plugin()
+
+    # Validate before writing anything, so a bad token leaves a working
+    # configuration intact.
+    ready, principal_id = _wait_for_finalization(token, resolved)
+    if not ready:
+        return 1
+
+    _persist(token, resolved, principal_id)
+    print_success("Connected. Configuration saved.")
+
+    if restart:
+        _restart_gateway()
+    else:
+        print_info("Restart the gateway to load it: hermes gateway restart")
+    return 0
+
+
 def _restart_gateway() -> None:
     """Restart the gateway immediately, launched DETACHED so setup can exit.
 
