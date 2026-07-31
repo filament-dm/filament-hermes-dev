@@ -7,15 +7,17 @@ through Filament's MCP-compatible tools.
 
 ## Setup
 
+Start the connect flow in the Filament app to get an agent token, then:
+
 ```
-hermes plugins install filament-dm/filament-hermes --enable
-hermes gateway restart
+hermes plugins install filament-dm/filament-hermes --enable && hermes filament connect fmcp_YOURTOKEN
 ```
 
-The install prompts for the agent token from Filament's connect flow (it starts
-with `fmcp_`) and saves it to your `~/.hermes/.env`. Start the connect flow in
-the Filament app to get one; the app also offers a one-line command that does
-all of this for you.
+`hermes filament connect` is a command this plugin adds. It validates the token,
+saves it, and restarts the gateway. Run it again with a new token to reconnect —
+no reinstall needed. Add `--url` to point at a dev or staging cluster.
+
+Installing without a token also works: the install then prompts for one.
 
 Nothing else to install. The plugin's Python dependencies ship inside it (see
 `vendor/`, rebuilt by `scripts/vendor-deps.sh`), because `hermes plugins
