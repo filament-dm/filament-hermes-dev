@@ -1,4 +1,4 @@
-"""Reactive-mode plumbing for the Filament FCM adapter.
+"""Reactive-mode plumbing for the Filament adapter.
 
 Shared channels (everything except the principal's backchannel) run in
 "reactive mode": an inbound event is a wake-up signal, not a command. The
@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
-logger = logging.getLogger("gateway.filament_fcm")
+logger = logging.getLogger("gateway.filament")
 
 # Safety-critical rules that apply to every reactive turn regardless of what the
 # principal has customized. The editable standing instructions (bundled default
@@ -246,10 +246,25 @@ def is_system_sender(sender: str | None, self_user_id: str | None) -> bool:
 
 
 def _default_dir() -> Path:
-    return Path(
-        os.environ.get("FILAMENT_FCM_CREDENTIALS_DIR")
-        or (Path.home() / ".hermes" / "filament-fcm")
+    # FILAMENT_FCM_CREDENTIALS_DIR was the name through v0.7.0, when the plugin
+    # itself was called "filament-fcm" and its state lived in
+    # ~/.hermes/filament-fcm/. Both are still honored: this tree holds the
+    # standing instructions and the wake/capability policies, so an agent that
+    # found neither dir would quietly fall back to defaults. The setup wizard
+    # moves the legacy dir on the next install (setup_cli.py's
+    # ``_migrate_state_dir``); this covers update-only upgrades, which never run
+    # the wizard. Mirrors credentials.py's ``default_state_dir`` — kept separate
+    # because both modules must load standalone in the tests (see CLAUDE.md).
+    override = os.environ.get("FILAMENT_CREDENTIALS_DIR") or os.environ.get(
+        "FILAMENT_FCM_CREDENTIALS_DIR"
     )
+    if override:
+        return Path(override)
+    current = Path.home() / ".hermes" / "filament"
+    legacy = Path.home() / ".hermes" / "filament-fcm"
+    if not current.is_dir() and legacy.is_dir():
+        return legacy
+    return current
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -304,7 +319,7 @@ class InstructionsStore:
                 text = path.read_text(encoding="utf-8").strip()
                 if text:
                     logger.info(
-                        "filament-fcm: loaded standing instructions (%s, %s, %d chars)",
+                        "filament: loaded standing instructions (%s, %s, %d chars)",
                         label,
                         path,
                         len(text),
@@ -313,8 +328,8 @@ class InstructionsStore:
             except FileNotFoundError:
                 continue
             except Exception:
-                logger.warning("filament-fcm: failed to read %s", path, exc_info=True)
-        logger.info("filament-fcm: no standing instructions found — using fallback")
+                logger.warning("filament: failed to read %s", path, exc_info=True)
+        logger.info("filament: no standing instructions found — using fallback")
         return self._FALLBACK
 
     def read_effective(self) -> str:
@@ -326,7 +341,7 @@ class InstructionsStore:
     def write(self, text: str) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(text, encoding="utf-8")
-        logger.info("filament-fcm: standing instructions updated (%d bytes)", len(text))
+        logger.info("filament: standing instructions updated (%d bytes)", len(text))
 
 
 class WakePolicyStore:
@@ -384,13 +399,13 @@ class WakePolicyStore:
         except FileNotFoundError:
             pass
         except Exception:
-            logger.warning("filament-fcm: failed to read wake policy", exc_info=True)
+            logger.warning("filament: failed to read wake policy", exc_info=True)
         return policy
 
     def write(self, policy: dict) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(policy, indent=2), encoding="utf-8")
-        logger.info("filament-fcm: wake policy updated")
+        logger.info("filament: wake policy updated")
 
     # ── Wake decisions (read fresh each call) ───────────────────────
 
@@ -404,7 +419,7 @@ class WakePolicyStore:
         mode = ch.get("reactive_wake", policy.get("reactive_wake", "mention"))
         woke = mode == "all" or (mode != "off" and bool(is_mention))
         logger.info(
-            "filament-fcm: wake(message) room=%s mode=%s mention=%s → %s",
+            "filament: wake(message) room=%s mode=%s mention=%s → %s",
             room_id,
             mode,
             is_mention,
@@ -425,7 +440,7 @@ class WakePolicyStore:
         style = ch.get("reply_style", policy.get("reply_style", "thread"))
         resolved = style if style in ("thread", "channel") else "thread"
         logger.info(
-            "filament-fcm: reply_style room=%s style=%s → %s",
+            "filament: reply_style room=%s style=%s → %s",
             room_id,
             style,
             resolved,
@@ -445,7 +460,7 @@ class WakePolicyStore:
         mode = ch.get("thread_wake", policy.get("thread_wake", "engaged"))
         resolved = mode if mode in ("engaged", "off") else "engaged"
         logger.info(
-            "filament-fcm: thread_wake room=%s mode=%s → %s",
+            "filament: thread_wake room=%s mode=%s → %s",
             room_id,
             mode,
             resolved,
@@ -458,7 +473,7 @@ class WakePolicyStore:
         emojis = ch.get("trigger_emojis", policy.get("trigger_emojis", []))
         woke = emoji in (emojis or [])
         logger.info(
-            "filament-fcm: wake(reaction) room=%s emoji=%s triggers=%s → %s",
+            "filament: wake(reaction) room=%s emoji=%s triggers=%s → %s",
             room_id,
             emoji,
             emojis,
@@ -516,7 +531,7 @@ class EngagedThreadStore:
             pass
         except Exception:
             logger.warning(
-                "filament-fcm: failed to read engaged threads", exc_info=True
+                "filament: failed to read engaged threads", exc_info=True
             )
         return {}
 
@@ -532,7 +547,7 @@ class EngagedThreadStore:
                 del threads[key]
         _atomic_write_text(self._path, json.dumps({"threads": threads}, indent=2))
         logger.info(
-            "filament-fcm: engaged thread recorded room=%s root=%s (%d tracked)",
+            "filament: engaged thread recorded room=%s root=%s (%d tracked)",
             room_id,
             thread_root_id,
             len(threads),
@@ -662,13 +677,13 @@ class CapabilityPolicyStore:
             pass
         except Exception:
             logger.warning(
-                "filament-fcm: failed to read capability policy", exc_info=True
+                "filament: failed to read capability policy", exc_info=True
             )
         return policy
 
     def write(self, policy: dict) -> None:
         _atomic_write_text(self._path, json.dumps(policy, indent=2))
-        logger.info("filament-fcm: capability policy updated")
+        logger.info("filament: capability policy updated")
 
     # ── Bundle expansion ────────────────────────────────────────────
 
@@ -704,14 +719,14 @@ class CapabilityPolicyStore:
         seen = _seen if _seen is not None else frozenset()
         if name in seen:
             logger.warning(
-                "filament-fcm: capability bundle cycle at %r (granting nothing)", name
+                "filament: capability bundle cycle at %r (granting nothing)", name
             )
             return frozenset()
         entries = defs.get(name)
         if not isinstance(entries, list):
             if entries is None:
                 logger.warning(
-                    "filament-fcm: unknown capability bundle %r (granting nothing)",
+                    "filament: unknown capability bundle %r (granting nothing)",
                     name,
                 )
             return frozenset()
@@ -755,7 +770,7 @@ class CapabilityPolicyStore:
             granted += _names(per_user.get(sender))
         allowed = self.expand_capabilities(granted, policy)
         logger.info(
-            "filament-fcm: capabilities room=%s sender=%s grants=%s → %d tool(s)",
+            "filament: capabilities room=%s sender=%s grants=%s → %d tool(s)",
             room_id,
             sender,
             granted,
@@ -816,7 +831,7 @@ class FeatureFlagStore:
         except FileNotFoundError:
             pass
         except Exception:
-            logger.warning("filament-fcm: failed to read feature flags", exc_info=True)
+            logger.warning("filament: failed to read feature flags", exc_info=True)
         return {}
 
     def is_enabled(self, name: str) -> bool:
@@ -828,5 +843,5 @@ class FeatureFlagStore:
         flags = self.read()
         flags[name] = bool(enabled)
         _atomic_write_text(self._path, json.dumps(flags, indent=2))
-        logger.info("filament-fcm: feature %r set to %s", name, bool(enabled))
+        logger.info("filament: feature %r set to %s", name, bool(enabled))
         return flags

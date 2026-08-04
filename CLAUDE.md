@@ -15,13 +15,13 @@ uv run --group dev pytest tests/test_reactive.py::test_name -q         # one tes
 uv run --group dev ruff check .            # lint (config in pyproject.toml)
 ```
 
-There is no build step. End users never install this by hand — the Filament app hands them a one-liner that runs `install.sh` with a `CONNECT_TOKEN`, which pip-installs the package into the Hermes venv and runs the `filament-fcm-setup` wizard (`setup_cli.py`).
+There is no build step. End users never install this by hand — the Filament app hands them a one-liner that runs `install.sh` with a `CONNECT_TOKEN`, which pip-installs the package into the Hermes venv and runs the `filament-setup` wizard (`setup_cli.py`).
 
 ## The Hermes dependency is implicit — and tests must not need it
 
 The package imports `gateway.*`, `agent.*`, and `hermes_cli.*` from hermes-agent at runtime, but hermes-agent is **not** a declared dependency (the plugin is installed into an existing Hermes venv). Consequently:
 
-- Importing `hermes_filament_fcm` fails in a bare dev environment.
+- Importing `hermes_filament` fails in a bare dev environment.
 - Tests load modules **standalone** via `importlib.util.spec_from_file_location`, bypassing `__init__.py`, and stub non-stdlib deps (see `test_fcm_receiver_death.py` for the `firebase_messaging` stub pattern). Follow this pattern for new tests.
 - Keep unit-testable logic in stdlib-only modules (`reactive.py`, `credentials.py`) or behind stub-able seams; `adapter.py` and `__init__.py` can't be imported without Hermes.
 
@@ -35,7 +35,7 @@ The package imports `gateway.*`, `agent.*`, and `hermes_cli.*` from hermes-agent
 
 `filament_api.py` — `FilamentAPI`, the MCP-over-HTTP client (JSON-RPC). One instance is shared by the adapter and every tool handler. Its httpx client is recreated per event loop because calls arrive from both the gateway loop and the firebase-messaging thread.
 
-`credentials.py` — persists FCM credentials and received persistent ids under `~/.hermes/filament-fcm/` (`FILAMENT_FCM_CREDENTIALS_DIR` to override). The persistent ids seed the next MCS login so Google doesn't redeliver already-handled pushes after a restart.
+`credentials.py` — persists FCM credentials and received persistent ids under `~/.hermes/filament/` (`FILAMENT_CREDENTIALS_DIR` to override). The persistent ids seed the next MCS login so Google doesn't redeliver already-handled pushes after a restart.
 
 `reactive.py` + `setup_cli.py` — reactive-plane stores and the setup wizard. `reactive.py` also holds the `current_capabilities` ContextVar, the `capability_denies` gate decision, `capability_hint`, `CapabilityPolicyStore` (per-channel / per-user grants of named tool *bundles*, fail-closed, read fresh per event, server-migratable), and `FeatureFlagStore` (runtime flags, default OFF, read fresh per event — gates the whole capability surface via `FEATURE_ADVANCED_TOOL_CONTROLS`).
 
@@ -55,7 +55,21 @@ Load-bearing invariants:
 
 ## Configuration (environment variables)
 
-`FILAMENT_MCP_TOKEN` (required), `FILAMENT_MCP_URL` (default production `https://api.filament.dm/mcp/agents`), `FILAMENT_CONTROL_USERS` (extra trusted commanders; the principal is auto-discovered via `get_self`), `FILAMENT_ALLOW_DATA_USERS` (default true — set false for a control-plane-only agent), `FILAMENT_HOME_ROOM`, `FILAMENT_FCM_CREDENTIALS_DIR`, `FILAMENT_CAPABILITY_POLICY_FILE` (override the data-plane capability policy path; default `<creds dir>/capability_policy.json`), `FILAMENT_FEATURE_FLAGS_FILE` (override the feature-flag path; default `<creds dir>/feature_flags.json`), `FILAMENT_ENGAGED_THREADS_FILE` (override the engaged-thread record path; default `<creds dir>/engaged_threads.json`), `FILAMENT_DISABLE_UPDATE_CHECK` (set true to turn off the daily new-version check/reminder — see `update_check.py`), `HERMES_HOME`.
+`FILAMENT_MCP_TOKEN` (required), `FILAMENT_MCP_URL` (default production `https://api.filament.dm/mcp/agents`), `FILAMENT_CONTROL_USERS` (extra trusted commanders; the principal is auto-discovered via `get_self`), `FILAMENT_ALLOW_DATA_USERS` (default true — set false for a control-plane-only agent), `FILAMENT_HOME_ROOM`, `FILAMENT_CREDENTIALS_DIR`, `FILAMENT_CAPABILITY_POLICY_FILE` (override the data-plane capability policy path; default `<creds dir>/capability_policy.json`), `FILAMENT_FEATURE_FLAGS_FILE` (override the feature-flag path; default `<creds dir>/feature_flags.json`), `FILAMENT_ENGAGED_THREADS_FILE` (override the engaged-thread record path; default `<creds dir>/engaged_threads.json`), `FILAMENT_DISABLE_UPDATE_CHECK` (set true to turn off the daily new-version check/reminder — see `update_check.py`), `HERMES_HOME`.
+
+`FILAMENT_FCM_REGISTER_ATTEMPTS` (undocumented knob, `fcm_client.py`) keeps its `FCM_` infix — it bounds FCM *registration* retries, not the plugin.
+
+## The pre-0.8 name (`filament-fcm`) — the migrations are load-bearing
+
+The plugin was called `filament-fcm` through v0.7.0. Three pieces of on-disk state were keyed on that name, and each has a migration plus a fallback, because every failure here is **silent** — the agent comes back up looking healthy with default instructions, or with every channel's conversation reset:
+
+- **State dir** `~/.hermes/filament-fcm/` → `~/.hermes/filament/`. It holds far more than FCM credentials: standing instructions, wake policy, capability policy, engaged threads. `setup_cli._migrate_state_dir()` moves it on the next install; `credentials.default_state_dir()` and `reactive._default_dir()` independently fall back to the legacy dir when the new one is absent, which is what covers agents upgraded with `hermes plugins update` alone (that never runs the wizard). Those two resolvers are **deliberately duplicated** — both modules must stay standalone-loadable for the tests.
+- **`plugins.enabled`** — Hermes matches the *directory* name first and the manifest `name:` second (`hermes_cli/plugins.py`), so a legacy clone in `plugins/filament-fcm/` keeps loading after a code-only update. `setup_cli._enable_plugin()` rewrites the entry; `install.sh` deletes the legacy clone so two copies can't both register the platform.
+- **Platform name** — session keys are `agent:<ns>:<platform>:<chat_type>:…`, so renaming `Platform(...)` strands every conversation. `setup_cli._migrate_session_keys()` re-keys `sessions/sessions.json` immediately before the gateway restart (the running gateway rewrites that file wholesale from memory, so an earlier rewrite can be clobbered).
+
+Operator-facing update commands must not hardcode `filament`: a legacy install still lives in `plugins/filament-fcm/` and that is the name its `hermes plugins update` takes. `_version.installed_plugin_name()` (and `deps._plugin_dir_name()`) read it off disk — use them.
+
+`FILAMENT_FCM_CREDENTIALS_DIR`, `FILAMENT_FCM_REPO` and `FILAMENT_FCM_REF` are still honored alongside their new names.
 
 ## Versioning
 

@@ -16,7 +16,7 @@ def _load_filament_api():
         stub = types.ModuleType("httpx")
         stub.AsyncClient = type("AsyncClient", (), {})  # annotation-only use
         sys.modules["httpx"] = stub
-    base = Path(__file__).parent.parent / "hermes_filament_fcm"
+    base = Path(__file__).parent.parent / "hermes_filament"
     pkg_name = "hfcm_standalone"
     if pkg_name not in sys.modules:
         pkg = types.ModuleType(pkg_name)

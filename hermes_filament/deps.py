@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _dist_version
+from pathlib import Path
 
 # HARD dependencies — the plugin cannot function without these, so a missing
 # one makes check_requirements() fail (the platform stays down with an
@@ -47,12 +48,29 @@ REQUIRED = {"firebase-messaging": ">=0.4.5,<1"}
 # plain stdlib logging when it's absent).
 OPTIONAL = {"structlog": ">=25.5.0,<26"}
 
+def _plugin_dir_name() -> str:
+    """The name ``hermes plugins update`` takes for this install.
+
+    Pre-0.8 the plugin was called "filament-fcm", and `hermes plugins update` is
+    a git pull in place — it never renames the directory — so an agent that
+    upgraded that way still answers to the old name. Read the name off disk so
+    the hint below is right on both. Mirrors ``_version.installed_plugin_name``;
+    duplicated because this module must stay import-free of the package (it is
+    loaded standalone by the tests — see the module docstring).
+    """
+    try:
+        name = Path(__file__).resolve().parent.parent.name
+    except Exception:
+        return "filament"
+    return name if name in ("filament", "filament-fcm") else "filament"
+
+
 # How the operator gets back to a good state. `plugins update` re-pulls the
 # plugin tree, vendor/ included, which is the fix when the tree is incomplete.
 # When the problem is instead an out-of-range ambient copy shadowing the
 # vendored one, uninstalling that copy is what hands the vendored tree back.
 REFRESH_HINT = (
-    "run `hermes plugins update filament-fcm` (this pulls the plugin's "
+    f"run `hermes plugins update {_plugin_dir_name()}` (this pulls the plugin's "
     "vendored dependencies too) and restart the gateway; if a separately "
     "pip-installed copy of the dependency is shadowing the vendored one, "
     "uninstall it"

@@ -1,7 +1,7 @@
 # Agent Boundaries: A Trust / Access / Risk Taxonomy
 
 **Status:** v0.1 — living document. Started 2026-06-27.
-**Scope:** How a Filament agent (Hermes + `hermes-filament-fcm`) can hold *different
+**Scope:** How a Filament agent (Hermes + `hermes-filament`) can hold *different
 postures toward different people and places* — full command-and-control where it's
 trusted, Twitter-bot-like interaction where it isn't — while ideally looking like a
 single presence on Filament. Generalizes to other personal-agent engines.
@@ -163,7 +163,7 @@ so Filament shows a single presence.
   owner, and `cc_room_id`.
 - **Push:** Filament allows many pushers per user (hence `list_push_tokens` is plural), so
   the server fans every push out to both processes. **Each process must use a distinct
-  `FILAMENT_FCM_CREDENTIALS_DIR`** (default `~/.hermes/filament-fcm/`, see
+  `FILAMENT_CREDENTIALS_DIR`** (default `~/.hermes/filament/`, see
   `credentials.py:22`) or they clobber each other's FCM registration. Two gateways on one
   host also need separate `HERMES_HOME`.
 - **Routing = work-claiming, not auth.** Both see every push, so each claims a *disjoint*
@@ -361,7 +361,7 @@ non-negotiable mitigations.
 ### Sources
 - Hermes: `NousResearch/hermes-agent` @ main — `gateway/authz_mixin.py`,
   `gateway/platforms/base.py`, `plugins/platforms/*/adapter.py`, `SECURITY.md`.
-- This repo: `hermes_filament_fcm/adapter.py`, `credentials.py`, `setup_cli.py`.
+- This repo: `hermes_filament/adapter.py`, `credentials.py`, `setup_cli.py`.
 - OpenClaw overview: [MindStudio — What Is OpenClaw](https://www.mindstudio.ai/blog/what-is-openclaw-ai-agent),
   [Dextra Labs — OpenClaw framework](https://dextralabs.com/blog/openclaw-ai-agent-frameworks/),
   [A Systematic Taxonomy of Security Vulnerabilities in the OpenClaw AI Agent Framework](https://arxiv.org/pdf/2603.27517).

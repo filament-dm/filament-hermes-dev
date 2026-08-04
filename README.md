@@ -27,5 +27,11 @@ images the venv the gateway imports from is not writable by the gateway anyway.
 To update:
 
 ```
-hermes plugins update filament-fcm && hermes gateway restart
+hermes plugins update filament && hermes gateway restart
 ```
+
+The plugin was named `filament-fcm` before v0.8.0. If it was installed then and
+has only ever been updated this way, its directory still carries the old name,
+so use `hermes plugins update filament-fcm` — or re-run the install command
+above, which moves the install (and the agent's saved instructions and
+conversations) onto the new name.

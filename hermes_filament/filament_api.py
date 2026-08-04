@@ -17,7 +17,7 @@ import httpx
 from ._version import DIST_NAME, PLUGIN_VERSION, version_headers
 from .observability import Stopwatch, current_context, get_logger
 
-logger = logging.getLogger("gateway.filament_fcm")
+logger = logging.getLogger("gateway.filament")
 slog = get_logger()
 
 # Standard MCP initialize params. clientInfo tells the server exactly what
@@ -101,7 +101,7 @@ class FilamentAPI:
         # initialize (error/non-200) would set is_connected True permanently and
         # subsequent calls would skip re-initialization on a dead session.
         if not (isinstance(result, dict) and isinstance(result.get("result"), dict)):
-            logger.warning("filament-fcm: MCP initialize did not succeed: %s", result)
+            logger.warning("filament: MCP initialize did not succeed: %s", result)
             return result
 
         # Session ID may come from header or body.
@@ -427,7 +427,7 @@ class FilamentAPI:
         written = 0
         timer = Stopwatch.start()
         slog.debug(
-            "filament_fcm.http.side_channel.start",
+            "filament.http.side_channel.start",
             **current_context(),
             path="/media",
             method="GET",
@@ -444,7 +444,7 @@ class FilamentAPI:
                 if resp.status_code != 200:
                     detail = (await resp.aread())[:200]
                     slog.warning(
-                        "filament_fcm.http.side_channel.complete",
+                        "filament.http.side_channel.complete",
                         **current_context(),
                         path="/media",
                         method="GET",
@@ -462,7 +462,7 @@ class FilamentAPI:
                         written += len(chunk)
             os.replace(tmp, dest)
             slog.debug(
-                "filament_fcm.http.side_channel.complete",
+                "filament.http.side_channel.complete",
                 **current_context(),
                 path="/media",
                 method="GET",
@@ -504,7 +504,7 @@ class FilamentAPI:
             content = json.dumps(body)
         timer = Stopwatch.start()
         slog.debug(
-            "filament_fcm.http.side_channel.start",
+            "filament.http.side_channel.start",
             **current_context(),
             path=path,
             method="POST",
@@ -516,7 +516,7 @@ class FilamentAPI:
             headers=headers,
         )
         slog.debug(
-            "filament_fcm.http.side_channel.complete",
+            "filament.http.side_channel.complete",
             **current_context(),
             path=path,
             method="POST",
@@ -547,7 +547,7 @@ class FilamentAPI:
             try:
                 await client.aclose()
             except Exception:
-                logger.debug("filament-fcm: error closing http client", exc_info=True)
+                logger.debug("filament: error closing http client", exc_info=True)
 
     def _next_rpc_id(self) -> int:
         rid = self._next_id
@@ -570,7 +570,7 @@ class FilamentAPI:
 
         timer = Stopwatch.start()
         slog.debug(
-            "filament_fcm.mcp.request.start",
+            "filament.mcp.request.start",
             **current_context(),
             rpc_id=rpc_id,
             method=method,
@@ -593,7 +593,7 @@ class FilamentAPI:
         # a notification was accepted — no response body expected.
         if resp.status_code in (202, 204):
             slog.debug(
-                "filament_fcm.mcp.request.complete",
+                "filament.mcp.request.complete",
                 **current_context(),
                 rpc_id=rpc_id,
                 method=method,
@@ -607,7 +607,7 @@ class FilamentAPI:
         if resp.status_code != 200:
             logger.error("MCP request failed: %d %s", resp.status_code, resp.text[:200])
             slog.warning(
-                "filament_fcm.mcp.request.complete",
+                "filament.mcp.request.complete",
                 **current_context(),
                 rpc_id=rpc_id,
                 method=method,
@@ -623,7 +623,7 @@ class FilamentAPI:
         except Exception:
             logger.error("Failed to parse MCP response: %s", resp.text[:200])
             slog.warning(
-                "filament_fcm.mcp.request.complete",
+                "filament.mcp.request.complete",
                 **current_context(),
                 rpc_id=rpc_id,
                 method=method,
@@ -636,9 +636,9 @@ class FilamentAPI:
         error = parsed.get("error") if isinstance(parsed, dict) else None
         error_code = error.get("code") if isinstance(error, dict) else None
         event = (
-            "filament_fcm.mcp.request.error"
+            "filament.mcp.request.error"
             if error_code is not None
-            else "filament_fcm.mcp.request.complete"
+            else "filament.mcp.request.complete"
         )
         log = slog.warning if error_code is not None else slog.debug
         log(

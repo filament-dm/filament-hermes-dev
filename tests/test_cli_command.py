@@ -19,18 +19,18 @@ from pathlib import Path
 
 import pytest
 
-_PKG_DIR = Path(__file__).resolve().parent.parent / "hermes_filament_fcm"
+_PKG_DIR = Path(__file__).resolve().parent.parent / "hermes_filament"
 
 
 def _load_cli():
-    pkg = types.ModuleType("hermes_filament_fcm")
+    pkg = types.ModuleType("hermes_filament")
     pkg.__path__ = [str(_PKG_DIR)]
-    sys.modules["hermes_filament_fcm"] = pkg
+    sys.modules["hermes_filament"] = pkg
     spec = importlib.util.spec_from_file_location(
-        "hermes_filament_fcm.cli", _PKG_DIR / "cli.py"
+        "hermes_filament.cli", _PKG_DIR / "cli.py"
     )
     module = importlib.util.module_from_spec(spec)
-    sys.modules["hermes_filament_fcm.cli"] = module
+    sys.modules["hermes_filament.cli"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -140,9 +140,9 @@ def test_handler_calls_connect_and_returns_its_code(monkeypatch):
         calls.update(token=token, url=url, restart=restart)
         return 0
 
-    stub = types.ModuleType("hermes_filament_fcm.setup_cli")
+    stub = types.ModuleType("hermes_filament.setup_cli")
     stub.connect = fake_connect
-    monkeypatch.setitem(sys.modules, "hermes_filament_fcm.setup_cli", stub)
+    monkeypatch.setitem(sys.modules, "hermes_filament.setup_cli", stub)
 
     rc = cli._handler(_parse(["connect", "fmcp_abc", "--no-restart"]))
     assert rc == 0
@@ -151,7 +151,7 @@ def test_handler_calls_connect_and_returns_its_code(monkeypatch):
 
 @pytest.mark.parametrize("code", [0, 1, 2])
 def test_handler_propagates_failure_codes(monkeypatch, code):
-    stub = types.ModuleType("hermes_filament_fcm.setup_cli")
+    stub = types.ModuleType("hermes_filament.setup_cli")
     stub.connect = lambda token, url=None, restart=True: code
-    monkeypatch.setitem(sys.modules, "hermes_filament_fcm.setup_cli", stub)
+    monkeypatch.setitem(sys.modules, "hermes_filament.setup_cli", stub)
     assert cli._handler(_parse(["connect", "fmcp_abc"])) == code

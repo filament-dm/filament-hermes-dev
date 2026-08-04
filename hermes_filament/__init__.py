@@ -1,4 +1,4 @@
-"""Filament FCM — Hermes gateway adapter via FCM push notifications.
+"""Filament — Hermes gateway adapter via FCM push notifications.
 
 Distributed as a pip package with firebase-messaging as a dependency.
 Auto-discovered by Hermes via the ``hermes_agent.plugins`` entry-point.
@@ -49,7 +49,7 @@ from .reactive import (
 )
 from .setup_cli import _enable_plugin, _run_interactive_setup
 
-logger = logging.getLogger("gateway.filament_fcm")
+logger = logging.getLogger("gateway.filament")
 
 _DEFAULT_MCP_URL = "https://api.filament.dm/mcp/agents"
 
@@ -78,11 +78,11 @@ def _resolve_tools(mcp_url: str, mcp_token: str) -> list[dict]:
     if mcp_token:
         try:
             tools = FilamentAPI.fetch_tools(mcp_url, mcp_token)
-            logger.info("filament-fcm: fetched %d tools from MCP server", len(tools))
+            logger.info("filament: fetched %d tools from MCP server", len(tools))
             return tools
         except Exception as exc:
             logger.warning(
-                "filament-fcm: dynamic tool fetch failed (%s); "
+                "filament: dynamic tool fetch failed (%s); "
                 "falling back to static manifest",
                 exc,
             )
@@ -119,7 +119,7 @@ def _make_tool_handler(tool_name: str, api: FilamentAPI):
             parsed = api.parse_tool_result(result)
             return json.dumps(parsed, indent=2, default=str)
         except Exception as exc:
-            logger.exception("filament-fcm: tool %s failed", tool_name)
+            logger.exception("filament: tool %s failed", tool_name)
             return json.dumps({"error": str(exc)})
 
     handler.__name__ = f"filament_{tool_name}"
@@ -143,16 +143,16 @@ def check_requirements() -> bool:
     simply stays down until it is resolved.
     """
     if not os.environ.get("FILAMENT_MCP_TOKEN"):
-        logger.debug("filament-fcm: missing env var: FILAMENT_MCP_TOKEN")
+        logger.debug("filament: missing env var: FILAMENT_MCP_TOKEN")
         return False
     problem = dep_problem()
     if problem:
-        logger.warning("filament-fcm: dependency check failed — %s", problem)
+        logger.warning("filament: dependency check failed — %s", problem)
         return False
     # Soft deps (e.g. structlog): the plugin still runs, just degraded, so nudge
     # rather than refuse to start.
     for warning in optional_dep_warnings():
-        logger.warning("filament-fcm: %s", warning)
+        logger.warning("filament: %s", warning)
     return True
 
 
@@ -187,7 +187,7 @@ def interactive_setup() -> None:
 
 
 def register(ctx: Any) -> None:
-    """Hermes plugin entry point.  Register the Filament FCM platform.
+    """Hermes plugin entry point.  Register the Filament platform.
 
     Creates a ``FilamentAPI`` instance and passes it to both the adapter
     factory and the tool handler closures.  The adapter calls
@@ -213,12 +213,12 @@ def register(ctx: Any) -> None:
     api = FilamentAPI(mcp_url, mcp_token)
 
     ctx.register_platform(
-        name="filament-fcm",
-        label="Filament (FCM)",
+        name="filament",
+        label="Filament",
         adapter_factory=lambda cfg: FCMFilamentAdapter(cfg, filament_api=api),
         check_fn=check_requirements,
         setup_fn=interactive_setup,
-        plugin_name="filament-fcm",
+        plugin_name="filament",
         required_env=[
             "FILAMENT_MCP_TOKEN",
         ],
@@ -338,7 +338,7 @@ def register(ctx: Any) -> None:
         registered += 1
 
     logger.info(
-        "filament-fcm: registered %d MCP tools (%d blocked)",
+        "filament: registered %d MCP tools (%d blocked)",
         registered,
         skipped,
     )
@@ -385,7 +385,7 @@ def _register_capability_gate(ctx: Any) -> None:
         if not capability_denies(allowed, tool_name):
             return None
         logger.info(
-            "filament-fcm: capability gate DENIED tool=%s (zone=%s, %d allowed)",
+            "filament: capability gate DENIED tool=%s (zone=%s, %d allowed)",
             tool_name,
             current_zone.get(),
             len(allowed) if allowed is not None else -1,
@@ -403,13 +403,13 @@ def _register_capability_gate(ctx: Any) -> None:
 
     try:
         ctx.register_hook("pre_tool_call", _capability_pre_tool_call)
-        logger.info("filament-fcm: capability gate registered (pre_tool_call)")
+        logger.info("filament: capability gate registered (pre_tool_call)")
     except Exception:
         # A Hermes without the pre_tool_call hook point would leave data turns
         # protected by framing only (the prior behavior) — degrade loudly, don't
         # crash startup.
         logger.warning(
-            "filament-fcm: could not register pre_tool_call capability gate; "
+            "filament: could not register pre_tool_call capability gate; "
             "data-plane tool capabilities are NOT hard-enforced on this Hermes",
             exc_info=True,
         )
@@ -531,7 +531,7 @@ def _register_reactive_tools(ctx: Any) -> None:
 
     def _deny(tool: str) -> str:
         logger.info(
-            "filament-fcm: %s DENIED (zone=%s, not control plane)",
+            "filament: %s DENIED (zone=%s, not control plane)",
             tool,
             current_zone.get(),
         )
@@ -540,7 +540,7 @@ def _register_reactive_tools(ctx: Any) -> None:
         )
 
     async def _set_instructions(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: set_instructions (zone=%s)", current_zone.get())
+        logger.info("filament: set_instructions (zone=%s)", current_zone.get())
         if current_zone.get() != "control":
             return _deny("set_instructions")
         text = args.get("instructions", "") or ""
@@ -548,13 +548,13 @@ def _register_reactive_tools(ctx: Any) -> None:
         return json.dumps({"ok": True, "bytes": len(text)})
 
     async def _get_instructions(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: get_instructions (zone=%s)", current_zone.get())
+        logger.info("filament: get_instructions (zone=%s)", current_zone.get())
         if current_zone.get() != "control":
             return _deny("get_instructions")
         return json.dumps({"instructions": instructions_store.read()})
 
     async def _set_wake_policy(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: set_wake_policy (zone=%s)", current_zone.get())
+        logger.info("filament: set_wake_policy (zone=%s)", current_zone.get())
         if current_zone.get() != "control":
             return _deny("set_wake_policy")
         policy = args.get("policy")
@@ -572,7 +572,7 @@ def _register_reactive_tools(ctx: Any) -> None:
         return json.dumps({"ok": True, "policy": policy})
 
     async def _get_wake_policy(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: get_wake_policy (zone=%s)", current_zone.get())
+        logger.info("filament: get_wake_policy (zone=%s)", current_zone.get())
         if current_zone.get() != "control":
             return _deny("get_wake_policy")
         return json.dumps({"policy": wake_store.read()})
@@ -590,7 +590,7 @@ def _register_reactive_tools(ctx: Any) -> None:
                 for ts in sorted(registry.get_registered_toolset_names())
             }
         except Exception:
-            logger.debug("filament-fcm: tool inventory unavailable", exc_info=True)
+            logger.debug("filament: tool inventory unavailable", exc_info=True)
             return None
 
     def _feature_off_notice() -> str:
@@ -607,7 +607,7 @@ def _register_reactive_tools(ctx: Any) -> None:
         )
 
     async def _get_capabilities(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: get_capabilities (zone=%s)", current_zone.get())
+        logger.info("filament: get_capabilities (zone=%s)", current_zone.get())
         if current_zone.get() != "control":
             return _deny("get_capabilities")
         if not feature_flags.is_enabled(FEATURE_ADVANCED_TOOL_CONTROLS):
@@ -631,7 +631,7 @@ def _register_reactive_tools(ctx: Any) -> None:
         return json.dumps(out, indent=2)
 
     async def _set_capabilities(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: set_capabilities (zone=%s)", current_zone.get())
+        logger.info("filament: set_capabilities (zone=%s)", current_zone.get())
         if current_zone.get() != "control":
             return _deny("set_capabilities")
         if not feature_flags.is_enabled(FEATURE_ADVANCED_TOOL_CONTROLS):
@@ -651,7 +651,7 @@ def _register_reactive_tools(ctx: Any) -> None:
         return json.dumps({"ok": True, "policy": policy})
 
     async def _get_features(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: get_features (zone=%s)", current_zone.get())
+        logger.info("filament: get_features (zone=%s)", current_zone.get())
         if current_zone.get() != "control":
             return _deny("get_features")
         flags = feature_flags.read()
@@ -666,7 +666,7 @@ def _register_reactive_tools(ctx: Any) -> None:
         )
 
     async def _set_feature(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: set_feature (zone=%s)", current_zone.get())
+        logger.info("filament: set_feature (zone=%s)", current_zone.get())
         if current_zone.get() != "control":
             return _deny("set_feature")
         name = args.get("feature")

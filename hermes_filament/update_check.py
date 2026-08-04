@@ -27,12 +27,13 @@ from ._version import (
     PLUGIN_VERSION,
     REPO_URL,
     USER_AGENT,
+    installed_plugin_name,
     is_newer,
     version_from_pyproject,
 )
 from .credentials import CredentialStore
 
-logger = logging.getLogger("gateway.filament_fcm")
+logger = logging.getLogger("gateway.filament")
 
 CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 
@@ -51,7 +52,8 @@ def build_reminder(latest: str, current: str) -> str:
         f"📦 A new version of the Filament↔Hermes plugin is available: "
         f"v{latest} (this agent runs v{current}). To update, run on the "
         f"machine hosting this agent:\n"
-        f"```\nhermes plugins update filament-fcm && hermes gateway restart\n```\n"
+        f"```\nhermes plugins update {installed_plugin_name()} "
+        f"&& hermes gateway restart\n```\n"
         f"That pulls the plugin's vendored dependencies along with its code, so "
         f"it is the whole update."
     )
@@ -67,11 +69,11 @@ async def fetch_latest_version(timeout: float = 10.0) -> str | None:
         ) as client:
             resp = await client.get(LATEST_PYPROJECT_URL)
             if resp.status_code != 200:
-                logger.debug("filament-fcm: update check got HTTP %d", resp.status_code)
+                logger.debug("filament: update check got HTTP %d", resp.status_code)
                 return None
             return version_from_pyproject(resp.text)
     except Exception:
-        logger.debug("filament-fcm: update check fetch failed", exc_info=True)
+        logger.debug("filament: update check fetch failed", exc_info=True)
         return None
 
 
@@ -96,14 +98,14 @@ class UpdateChecker:
         latest = await fetch_latest_version()
         if not latest or not is_newer(latest, self._current):
             logger.debug(
-                "filament-fcm: update check — running v%s, latest v%s",
+                "filament: update check — running v%s, latest v%s",
                 self._current,
                 latest,
             )
             return None
         # Always log (operator-visible), remind at most once per version.
         logger.warning(
-            "filament-fcm: plugin update available — v%s is out, this agent "
+            "filament: plugin update available — v%s is out, this agent "
             "runs v%s (%s)",
             latest,
             self._current,

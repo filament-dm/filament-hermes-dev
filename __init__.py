@@ -3,7 +3,7 @@
 Hermes reads ``plugin.yaml`` for the manifest and this file for the code. Its
 loader requires an ``__init__.py`` here, executes it, then calls ``register()``
 (``hermes_cli/plugins.py:_load_directory_module``). The code lives in the nested
-``hermes_filament_fcm`` package, so this file is a shim.
+``hermes_filament`` package, so this file is a shim.
 
 Keep this file committed. ``hermes plugins install`` copies the cloned tree as
 it is, so a generated file does not exist in the installed plugin.
@@ -33,7 +33,7 @@ def register(ctx) -> None:
     # top-level import of the package then fails, and every test errors. Hermes
     # calls register() inside the try/except that guards the module exec, so an
     # ImportError is still reported as the plugin's load error.
-    from .hermes_filament_fcm import register as _register  # noqa: PLC0415
+    from .hermes_filament import register as _register  # noqa: PLC0415
 
     return _register(ctx)
 

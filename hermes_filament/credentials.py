@@ -5,9 +5,9 @@ plugin doesn't re-register with Google on every startup, and the
 persistent ids of already-received pushes so Google MCS doesn't
 redeliver them after a gateway restart.
 
-Credentials are stored at ~/.hermes/filament-fcm/fcm_credentials.json
-and received ids at ~/.hermes/filament-fcm/received_persistent_ids.json
-(or the directory specified by FILAMENT_FCM_CREDENTIALS_DIR).
+Credentials are stored at ~/.hermes/filament/fcm_credentials.json
+and received ids at ~/.hermes/filament/received_persistent_ids.json
+(or the directory specified by FILAMENT_CREDENTIALS_DIR).
 
 Note: The MCP token is NOT persisted here — it is provided by the user
 via the FILAMENT_MCP_TOKEN environment variable and can be rotated
@@ -21,9 +21,30 @@ from pathlib import Path
 from secrets import token_hex
 from typing import Any
 
-logger = logging.getLogger("gateway.filament_fcm")
+logger = logging.getLogger("gateway.filament")
 
-_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".hermes", "filament-fcm")
+_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".hermes", "filament")
+
+# The plugin was called "filament-fcm" through v0.7.0, and its state lived in
+# ~/.hermes/filament-fcm/. That tree holds more than FCM credentials — standing
+# instructions, the wake policy, the capability policy, engaged threads — so an
+# agent that finds neither dir would silently revert to default instructions.
+# The setup wizard moves the legacy dir on the next install (setup_cli.py's
+# ``_migrate_state_dir``); this fallback covers agents that only ever run
+# ``hermes plugins update``, which never runs the wizard.
+#
+# Duplicated in reactive.py's ``_default_dir`` on purpose: both modules must
+# stay importable standalone (stdlib-only, no intra-package imports) so the
+# tests can load them without Hermes — see CLAUDE.md. Keep the two in sync.
+_LEGACY_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".hermes", "filament-fcm")
+
+
+def default_state_dir() -> str:
+    """The plugin's state directory: the current path, or the legacy one when
+    that is the only one present."""
+    if not os.path.isdir(_DEFAULT_DIR) and os.path.isdir(_LEGACY_DEFAULT_DIR):
+        return _LEGACY_DEFAULT_DIR
+    return _DEFAULT_DIR
 
 # Cap on how many received persistent ids we keep. MCS only redelivers
 # recent unacked messages, so a bounded tail is plenty; this just keeps
@@ -32,11 +53,16 @@ MAX_RECEIVED_PERSISTENT_IDS = 1000
 
 
 class CredentialStore:
-    """Manages persisted FCM credentials for the filament-fcm plugin."""
+    """Manages persisted FCM credentials for the filament plugin."""
 
     def __init__(self, base_dir: str | None = None) -> None:
         self._dir = Path(
-            base_dir or os.environ.get("FILAMENT_FCM_CREDENTIALS_DIR", _DEFAULT_DIR)
+            base_dir
+            # FILAMENT_FCM_CREDENTIALS_DIR was the name through v0.7.0; still
+            # honored so an existing .env keeps pointing at the same tree.
+            or os.environ.get("FILAMENT_CREDENTIALS_DIR")
+            or os.environ.get("FILAMENT_FCM_CREDENTIALS_DIR")
+            or default_state_dir()
         )
 
     def _ensure_dir(self) -> None:

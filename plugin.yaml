@@ -1,14 +1,14 @@
 # Directory-plugin manifest. `hermes plugins install filament-dm/filament-hermes
-# --enable` git-clones this repo into ~/.hermes/plugins/filament-fcm, where
+# --enable` git-clones this repo into ~/.hermes/plugins/filament, where
 # Hermes discovers it via this manifest plus the root __init__.py (which
 # re-exports register()). That is also what makes `hermes plugins list` /
 # `enable` / `update` work.
-name: filament-fcm
-label: Filament (FCM)
+name: filament
+label: Filament
 kind: platform
 # Keep in sync with [project].version in pyproject.toml (pyproject is the
 # canonical version _version.py reads; this drives `hermes plugins list`).
-version: 0.7.0
+version: 0.8.0
 author: Filament
 description: >
   Hermes gateway adapter that connects your agent to Filament, a multiplayer

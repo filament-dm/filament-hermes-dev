@@ -10,7 +10,7 @@ Version resolution order (``plugin_version``):
 
 1. The ``pyproject.toml`` shipped alongside this code (the plugin's own
    directory). This is the source of truth for a **directory install**
-   (git-cloned into ~/.hermes/plugins/filament-fcm): ``hermes plugins update``
+   (git-cloned into ~/.hermes/plugins/filament): ``hermes plugins update``
    git-pulls that tree, so reading the version from it means the reported
    version tracks the code that is actually running — unlike
    ``importlib.metadata``, which would report a stale/absent pip dist-info.
@@ -24,8 +24,38 @@ import re
 from importlib.metadata import version as _dist_version
 from pathlib import Path
 
-DIST_NAME = "hermes-filament-fcm"
+DIST_NAME = "hermes-filament"
 REPO_URL = "https://github.com/filament-dm/filament-hermes"
+
+PLUGIN_NAME = "filament"
+
+# The name Hermes knows a *pre-0.8* install by: the plugin was called
+# "filament-fcm" then, and `hermes plugins update` is a git pull in place — it
+# never renames the directory. So an agent that upgrades that way keeps running
+# from ~/.hermes/plugins/filament-fcm, and `hermes plugins update filament`
+# would fail for it. Anything we hand an operator has to use the real one.
+_KNOWN_PLUGIN_DIR_NAMES = (PLUGIN_NAME, "filament-fcm")
+
+
+def plugin_name_from_dir(dir_name: str) -> str:
+    """Map an enclosing directory name to the plugin name Hermes knows.
+
+    Anything that isn't a plugin directory name — a dev checkout, site-packages —
+    answers to the current name.
+    """
+    return dir_name if dir_name in _KNOWN_PLUGIN_DIR_NAMES else PLUGIN_NAME
+
+
+def installed_plugin_name() -> str:
+    """The name to use in ``hermes plugins update <name>`` on this host.
+
+    Read from the directory this package sits in, which for a directory install
+    *is* the plugin name.
+    """
+    try:
+        return plugin_name_from_dir(Path(__file__).resolve().parent.parent.name)
+    except Exception:
+        return PLUGIN_NAME
 
 # install.sh installs from git main, so the version on main IS the latest
 # available version — no PyPI release to consult.
@@ -53,7 +83,7 @@ def version_from_pyproject(text: str) -> str | None:
 def _version_from_local_pyproject() -> str | None:
     """Read the version from the pyproject.toml next to this package.
 
-    This file lives at ``<plugin_root>/hermes_filament_fcm/_version.py``, so the
+    This file lives at ``<plugin_root>/hermes_filament/_version.py``, so the
     plugin's pyproject.toml is two levels up. Present in a git checkout and in a
     directory install; absent when only the package (no repo) was pip-installed.
     """

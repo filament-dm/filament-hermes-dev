@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Setup CLI for hermes-filament-fcm.
+"""Setup CLI for hermes-filament.
 
 Handles the chicken-and-egg problem where `hermes gateway setup` can't
 see the plugin until it's in `plugins.enabled`, but the setup wizard is
 supposed to handle enabling it.
 
 This script:
-  1. Adds 'filament-fcm' to plugins.enabled in config.yaml
-  2. Runs the interactive setup (prompts for token, senders, URL)
-  3. Restarts the gateway
+  1. Adds 'filament' to plugins.enabled in config.yaml
+  2. Migrates state left behind by the old 'filament-fcm' plugin name
+  3. Runs the interactive setup (prompts for token, senders, URL)
+  4. Restarts the gateway
 
 Usage:
-    filament-fcm-setup
+    filament-setup
 """
 
 import asyncio
+import contextlib
+import json
 import os
 import subprocess
 import time
@@ -57,14 +60,27 @@ def _find_hermes_home() -> Path:
     return Path.home() / ".hermes"
 
 
+# The plugin was named "filament-fcm" through v0.7.0. Everything it keyed on
+# that name — the enabled-plugins entry, the state directory, the gateway's
+# session-routing keys — is migrated by the helpers below, so an upgrade keeps
+# working instead of coming back up as a stranger with no memory. Each one is
+# idempotent and never overwrites an already-migrated target, so re-running the
+# installer is safe. See also credentials.py / reactive.py, which fall back to
+# the legacy state dir for agents that upgrade with `hermes plugins update`
+# alone and therefore never reach this wizard.
+_LEGACY_PLUGIN_NAME = "filament-fcm"
+_PLUGIN_NAME = "filament"
+
+
 def _enable_plugin() -> None:
-    """Add 'filament-fcm' to plugins.enabled in config.yaml."""
+    """Add 'filament' to plugins.enabled in config.yaml (dropping the legacy
+    'filament-fcm' entry)."""
     config_path = _find_hermes_home() / "config.yaml"
 
     if not config_path.exists():
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text("plugins:\n  enabled:\n  - filament-fcm\n")
-        print_info(f"Created {config_path} with filament-fcm enabled")
+        config_path.write_text(f"plugins:\n  enabled:\n  - {_PLUGIN_NAME}\n")
+        print_info(f"Created {config_path} with {_PLUGIN_NAME} enabled")
         return
 
     with open(config_path) as f:
@@ -74,17 +90,138 @@ def _enable_plugin() -> None:
     enabled = plugins.get("enabled")
     if not isinstance(enabled, list):
         enabled = []
-    if "filament-fcm" in enabled:
-        print_info("Plugin filament-fcm is already enabled")
+
+    # Hermes matches plugins.enabled against the *directory* name first and the
+    # manifest name second, so a stale "filament-fcm" entry is harmless on its
+    # own — but leaving it would re-enable an old clone that survived somewhere,
+    # and two copies both register the platform. Drop it.
+    had_legacy = _LEGACY_PLUGIN_NAME in enabled
+    already = _PLUGIN_NAME in enabled
+    if already and not had_legacy:
+        print_info(f"Plugin {_PLUGIN_NAME} is already enabled")
         return
 
-    enabled.append("filament-fcm")
+    enabled = [e for e in enabled if e != _LEGACY_PLUGIN_NAME]
+    if not already:
+        enabled.append(_PLUGIN_NAME)
     plugins["enabled"] = enabled
 
     with open(config_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
 
-    print_info(f"Enabled filament-fcm in {config_path}")
+    if had_legacy:
+        print_info(
+            f"Renamed {_LEGACY_PLUGIN_NAME} → {_PLUGIN_NAME} in {config_path}"
+        )
+    else:
+        print_info(f"Enabled {_PLUGIN_NAME} in {config_path}")
+
+
+def _migrate_state_dir() -> None:
+    """Move ~/.hermes/filament-fcm/ to ~/.hermes/filament/.
+
+    The tree holds the agent's standing instructions, wake policy, capability
+    policy, engaged threads and FCM registration — losing it would reset the
+    agent's behaviour and force a re-registration with Google. Skipped when the
+    user pinned the location by hand, and when the new dir already exists (the
+    already-migrated case, and the only case where a move could destroy data).
+    """
+    if os.environ.get("FILAMENT_CREDENTIALS_DIR") or os.environ.get(
+        "FILAMENT_FCM_CREDENTIALS_DIR"
+    ):
+        return
+
+    # credentials.py resolves this against ~ rather than $HERMES_HOME, so match
+    # that exactly — migrating a different tree would be a no-op at best.
+    base = Path.home() / ".hermes"
+    legacy, current = base / _LEGACY_PLUGIN_NAME, base / _PLUGIN_NAME
+    if not legacy.is_dir() or current.exists():
+        return
+
+    try:
+        os.replace(legacy, current)
+    except OSError as exc:
+        # Not fatal: both modules that read this tree fall back to the legacy
+        # path when the new one is absent, so the agent keeps its state either
+        # way. Say so rather than failing the install.
+        print_warning(f"Could not move {legacy} to {current} ({exc}); still using it.")
+        return
+    print_info(f"Moved agent state {legacy} → {current}")
+
+
+def _migrate_session_keys() -> None:
+    """Re-key the gateway's session index from the old platform name.
+
+    Session keys are ``agent:<ns>:<platform>:<chat_type>:...`` (``parts[2]`` is
+    the platform), so renaming the platform would otherwise strand every
+    channel's conversation and each one would start over with no context. Rewrite
+    the routing index in place, keeping session ids intact.
+
+    Called immediately before the gateway restart: the running gateway holds
+    this index in memory and rewrites the whole file when it saves, so an
+    earlier rewrite could be clobbered by a message arriving mid-install.
+    """
+    path = _find_hermes_home() / "sessions" / "sessions.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError):
+        print_warning(f"Could not read {path}; channels will start fresh sessions.")
+        return
+    if not isinstance(data, dict):
+        return
+
+    def rekey(key: str) -> str:
+        parts = key.split(":")
+        if len(parts) > 2 and parts[2] == _LEGACY_PLUGIN_NAME:
+            parts[2] = _PLUGIN_NAME
+            return ":".join(parts)
+        return key
+
+    migrated = 0
+    dropped = 0
+    out: dict = {}
+    for key, entry in data.items():
+        # "_README" and any other underscore key is a comment, not an entry.
+        if key.startswith("_") or not isinstance(entry, dict):
+            out[key] = entry
+            continue
+        new_key = rekey(key)
+        # A key under the new name already exists (a turn ran before the
+        # migration): that one is current — keep it and drop the stale twin.
+        # Counted separately, because dropping it is itself a change that has to
+        # be written out; otherwise the stale key survives in the file.
+        if new_key != key and new_key in data:
+            dropped += 1
+            continue
+        if new_key != key:
+            migrated += 1
+        updated = dict(entry)
+        updated["session_key"] = rekey(str(entry.get("session_key", new_key)))
+        if updated.get("platform") == _LEGACY_PLUGIN_NAME:
+            updated["platform"] = _PLUGIN_NAME
+        origin = updated.get("origin")
+        if isinstance(origin, dict) and origin.get("platform") == _LEGACY_PLUGIN_NAME:
+            updated["origin"] = {**origin, "platform": _PLUGIN_NAME}
+        out[new_key] = updated
+
+    if not migrated and not dropped:
+        return
+
+    # Write via a temp file + replace so an interrupted install can't leave the
+    # gateway with a truncated routing index.
+    tmp = path.with_name(f"{path.name}.filament-rename.tmp")
+    try:
+        tmp.write_text(json.dumps(out, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        print_warning(f"Could not rewrite {path} ({exc}); channels start fresh.")
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        return
+    if migrated:
+        print_info(f"Carried {migrated} conversation(s) over to the new platform name")
 
 
 # JSON-RPC codes from the agents MCP. -32002: token valid but the account
@@ -197,7 +334,7 @@ def _run_interactive_setup() -> bool:
     finalized and the gateway should be restarted), ``False`` when setup
     was skipped, aborted, or finalization failed.
     """
-    print_header("Filament (FCM)")
+    print_header("Filament")
 
     # The app's one-line connect command exports the agent token as
     # CONNECT_TOKEN, so the whole flow is a single paste with no token prompt.
@@ -206,7 +343,7 @@ def _run_interactive_setup() -> bool:
     existing_token = get_env_value("FILAMENT_MCP_TOKEN")
     if existing_token and not connect_token:
         print_info(
-            f"Filament FCM: already configured (token: {existing_token[:12]}...)"
+            f"Filament: already configured (token: {existing_token[:12]}...)"
         )
         if not prompt_yes_no("Reconfigure?", False):
             return False
@@ -356,8 +493,9 @@ def connect(token: str, url: str | None = None, restart: bool = True) -> int:
         url or get_env_value("FILAMENT_MCP_URL") or "https://api.filament.dm/mcp/agents"
     ).strip().rstrip("/")
 
-    print_header("Filament (FCM)")
+    print_header("Filament")
     _enable_plugin()
+    _migrate_state_dir()
 
     # Validate before writing anything, so a bad token leaves a working
     # configuration intact.
@@ -369,6 +507,7 @@ def connect(token: str, url: str | None = None, restart: bool = True) -> int:
     print_success("Connected. Configuration saved.")
 
     if restart:
+        _migrate_session_keys()
         _restart_gateway()
     else:
         print_info("Restart the gateway to load it: hermes gateway restart")
@@ -435,16 +574,18 @@ def _restart_gateway() -> None:
 
 
 def main() -> None:
-    """Entry point for the filament-fcm-setup command."""
+    """Entry point for the filament-setup command."""
     print()
-    print_header("filament-fcm-setup")
+    print_header("filament-setup")
 
     _enable_plugin()
+    _migrate_state_dir()
     print()
     ready = _run_interactive_setup()
     print()
 
     if ready:
+        _migrate_session_keys()
         _restart_gateway()
 
     print()

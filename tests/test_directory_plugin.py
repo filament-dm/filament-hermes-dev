@@ -87,7 +87,7 @@ def test_root_init_imports_without_a_parent_package():
     """The regression guard: no module-level relative import.
 
     pytest makes the rootdir a Package and imports this file before every test.
-    A module-level ``from .hermes_filament_fcm import register`` raises
+    A module-level ``from .hermes_filament import register`` raises
     "attempted relative import with no known parent package" there, which turns
     every test in the repo into a collection error.
     """
@@ -96,7 +96,7 @@ def test_root_init_imports_without_a_parent_package():
 
 
 def test_root_init_puts_vendor_on_sys_path():
-    module, path_after = _load_root_init(package="filament_fcm_undertest")
+    module, path_after = _load_root_init(package="filament_undertest")
     assert str(_VENDOR) in path_after
     assert callable(module.register)
 
@@ -108,7 +108,7 @@ def test_vendor_is_appended_not_prepended():
     deliberately, and make deps.py report a version that isn't the one a
     plain ``import`` in the same process would get.
     """
-    _, path_after = _load_root_init(package="filament_fcm_undertest2")
+    _, path_after = _load_root_init(package="filament_undertest2")
     assert path_after.index(str(_VENDOR)) == len(path_after) - 1
 
 
@@ -118,8 +118,8 @@ def test_root_init_is_idempotent():
     Hermes imports this file once per gateway process, but pytest's Package
     import and the plugin loader can both run in one interpreter.
     """
-    _, fresh = _load_root_init(package="filament_fcm_undertest3")
-    _, seeded = _load_root_init(package="filament_fcm_undertest4", seed_vendor=True)
+    _, fresh = _load_root_init(package="filament_undertest3")
+    _, seeded = _load_root_init(package="filament_undertest4", seed_vendor=True)
     assert fresh.count(str(_VENDOR)) == 1
     assert seeded.count(str(_VENDOR)) == 1
 

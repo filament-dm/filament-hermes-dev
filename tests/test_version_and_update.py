@@ -13,17 +13,17 @@ import sys
 import types
 from pathlib import Path
 
-_PKG_DIR = Path(__file__).resolve().parent.parent / "hermes_filament_fcm"
+_PKG_DIR = Path(__file__).resolve().parent.parent / "hermes_filament"
 
 
 def _load(name: str):
-    mod_name = f"hermes_filament_fcm.{name}"
+    mod_name = f"hermes_filament.{name}"
     if mod_name in sys.modules:
         return sys.modules[mod_name]
-    if "hermes_filament_fcm" not in sys.modules:
-        pkg = types.ModuleType("hermes_filament_fcm")
+    if "hermes_filament" not in sys.modules:
+        pkg = types.ModuleType("hermes_filament")
         pkg.__path__ = [str(_PKG_DIR)]
-        sys.modules["hermes_filament_fcm"] = pkg
+        sys.modules["hermes_filament"] = pkg
     spec = importlib.util.spec_from_file_location(mod_name, _PKG_DIR / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = module
@@ -49,7 +49,7 @@ def test_plugin_version_is_string():
 
 def test_version_headers_present():
     headers = _version.version_headers()
-    assert headers["User-Agent"].startswith("hermes-filament-fcm/")
+    assert headers["User-Agent"].startswith("hermes-filament/")
     assert headers["X-Filament-Plugin-Version"]
 
 
@@ -210,7 +210,7 @@ def test_async_client_carries_version_headers():
         return dict(api._client_for_loop().headers)
 
     headers = asyncio.run(_get_headers())
-    assert headers.get("user-agent", "").startswith("hermes-filament-fcm/")
+    assert headers.get("user-agent", "").startswith("hermes-filament/")
     assert "x-filament-plugin-version" in headers
 
 
@@ -228,7 +228,7 @@ def test_initialize_sends_client_info():
     init = posted[0]
     assert init["method"] == "initialize"
     client_info = init["params"]["clientInfo"]
-    assert client_info["name"] == "hermes-filament-fcm"
+    assert client_info["name"] == "hermes-filament"
     assert client_info["version"] == _version.PLUGIN_VERSION
 
 
@@ -268,6 +268,6 @@ def test_fetch_tools_sends_version(monkeypatch):
     tools = filament_api.FilamentAPI.fetch_tools("https://example.test", "tok")
     assert tools == []
     for headers in seen["headers"]:
-        assert headers.get("User-Agent", "").startswith("hermes-filament-fcm/")
+        assert headers.get("User-Agent", "").startswith("hermes-filament/")
         assert "X-Filament-Plugin-Version" in headers
-    assert seen["bodies"][0]["params"]["clientInfo"]["name"] == "hermes-filament-fcm"
+    assert seen["bodies"][0]["params"]["clientInfo"]["name"] == "hermes-filament"

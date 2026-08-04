@@ -1,6 +1,6 @@
 [project]
-name = "hermes-filament-fcm"
-version = "0.7.0"
+name = "hermes-filament"
+version = "0.8.0"
 description = "Hermes gateway adapter for Filament"
 requires-python = ">=3.9"
 license = "MIT"
@@ -18,14 +18,18 @@ dependencies = [
 dev = [
     "pytest",
     "ruff",
+    # setup_cli.py reads/writes config.yaml. PyYAML is a Hermes core dependency
+    # at runtime (hence not in [project.dependencies], which is only what this
+    # plugin adds to the venv), but the tests need it to load setup_cli at all.
+    "pyyaml",
 ]
 
 [project.scripts]
-filament-fcm-setup = "hermes_filament_fcm.setup_cli:main"
+filament-setup = "hermes_filament.setup_cli:main"
 
 # NOTE: no ``[project.entry-points."hermes_agent.plugins"]`` here.
 # This plugin installs as a *directory plugin* (git-cloned into
-# ~/.hermes/plugins/filament-fcm by `hermes plugins install`), discovered via
+# ~/.hermes/plugins/filament by `hermes plugins install`), discovered via
 # its root plugin.yaml + __init__.py — NOT as a pip entry-point plugin.
 # Registering an entry point too would shadow the directory copy (entry points
 # win the loader's dedup), so `hermes plugins update` would git-pull code that
@@ -38,7 +42,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["hermes_filament_fcm"]
+packages = ["hermes_filament"]
 
 [tool.ruff]
 # vendor/ is third-party code unpacked from PyPI wheels, byte-for-byte. Linting
