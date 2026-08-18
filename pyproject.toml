@@ -1,6 +1,6 @@
 [project]
 name = "hermes-filament-fcm"
-version = "0.10.4"
+version = "0.10.5"
 description = "Hermes gateway adapter for Filament"
 requires-python = ">=3.9"
 license = "MIT"

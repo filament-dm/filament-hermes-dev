@@ -388,7 +388,6 @@ def test_cursor_advance_soundness_rules():
 
 def test_cursor_window_matches_breadcrumb_limit():
     import importlib.util as _ilu
-    from pathlib import Path as _P
 
     spec = _ilu.spec_from_file_location(
         "reactive_sync_check", _PKG / "reactive.py"

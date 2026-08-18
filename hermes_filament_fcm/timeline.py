@@ -401,7 +401,7 @@ def cursor_advance_is_sound(
     return False
 
 
-def newest_message(payload: Mapping) -> "tuple[str, int | None] | None":
+def newest_message(payload: Mapping) -> tuple[str, int | None] | None:
     """The newest real message in a ``get_recent_messages`` payload
     (messages are oldest-first) as ``(event_id, epoch_ms_or_None)``, for
     the read-cursor: state noise doesn't count as having "read" the
