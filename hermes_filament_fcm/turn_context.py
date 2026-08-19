@@ -26,13 +26,16 @@ whole fail-closed story:
 
 - ``zone`` defaults to ``"data"`` — the LOW-privilege value. A turn that
   never set a context cannot edit policy.
-- ``capabilities`` defaults to ``None``, meaning *ungated*. That looks
-  backwards but isn't: turns from outside this plugin (a plain CLI session
-  in the same Hermes process) must not be gated by a Filament policy they
-  have nothing to do with. Fail-closed for the data plane is achieved at the
-  dispatch site instead, by ALWAYS resolving an explicit set for a data turn
-  — an unlisted channel resolves to the minimal default profile, never to
-  ``None``.
+- ``capabilities`` defaults to ``None``, meaning *ungated*, so that turns
+  from outside this plugin (a plain CLI session in the same Hermes process)
+  are not gated by a Filament policy they have nothing to do with.
+
+Data-plane fail-closure is therefore the dispatch site's job, and only
+applies while the ``advanced_tool_controls`` feature flag is on: with the
+flag on, a data turn always gets an explicit set (an unlisted channel
+resolves to the minimal default profile, never to ``None``). With the flag
+off — the default — a data turn is ungated, exactly like an install that
+predates the feature.
 
 ContextVars are task-local, so concurrent turns don't race and no reset is
 needed: the turn's task ends and its context goes with it.

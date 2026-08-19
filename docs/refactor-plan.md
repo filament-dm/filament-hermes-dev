@@ -1,274 +1,283 @@
-# Refactoring the turn path into six phases
+# Turn path refactor
 
-## Why
+## Overview
 
-The invariants in this plugin are carefully reasoned and unusually well
-commented. The problem is not the reasoning — it is that **the decisions and
-the effects are interleaved, and the sequence exists only in prose.** You
-cannot look at `adapter.py` and see the order things happen in; you have to
-read three near-parallel 150-line methods and diff them in your head.
+This document plans a refactor of the inbound turn path in `adapter.py`.
+The goal is a fixed sequence of six named phases, so that reading one function
+tells you the whole order of operations for any inbound event.
 
-Concretely, as of the start of this work:
+`adapter.py` is 2440 lines and holds five unrelated jobs: the staged connect,
+administrative traffic, the turn path, `send()`, and the status lifecycle.
+This plan covers the turn path only.
+Steps 1 and 2 are complete; see [Progress](#progress).
 
-**Four dispatch sites, each hand-rolling the same handoff.**
-`_handle_control_message`, `_wake`, `_maybe_greet`, and (via `_wake`) the
-reaction path each independently did: set four ContextVars → apply session
-keying → begin the status turn → `handle_message`. They did not agree.
-`_maybe_greet` set **zero** ContextVars, so a backchannel greet ran with
-`current_zone` at its `"data"` default and no session keying applied — a
-control-plane turn presenting as data plane. Benign today only because the
-greet prompt says "do not call any tools."
+Terms used throughout:
 
-**Triage duplicated and divergent.** `_is_new_event` and the own-sender check
-were copy-pasted in `_handle_push_message_turn` and `_handle_reaction_turn`.
-`is_system_sender` existed in **only** the message path, so a `filament_god`
-reaction could wake the agent where the equivalent message could not. Nine
-separate `turn.skipped` log sites carried hand-written reason strings.
+Term | Meaning
+--- | ---
+Control plane | The principal's private backchannel. Messages there are commands.
+Data plane | Every shared channel. An event is a wake-up signal, and its content is data, not instructions.
+Turn | One dispatch of an event to the Hermes agent loop.
+Phase | One numbered step of the turn path, with a declared input, output, and I/O budget.
 
-**A sentinel where normalization belongs.** `_wake` told a message from a
-reaction by `data is None`, with a three-line comment defending why an empty
-string is not the same as `None`.
+## Problems in the current code
 
-**Load-bearing ordering that only comments enforce.** "Skip before
-wake-policy, media-note, and breadcrumb work so no turn or API call is spent."
-"Order matters for cost and safety." "Applied synchronously right before
-dispatch: no await can interleave." All true, all invisible in the structure,
-all re-derivable only by reading every path.
+**Four dispatch sites implement the same handoff separately.**
+`_handle_control_message`, `_wake`, `_maybe_greet`, and the reaction path each
+set four ContextVars, apply session keying, open a status turn, and call
+`handle_message`.
+They do not agree.
+`_maybe_greet` sets no ContextVars at all, so a backchannel greeting runs with
+the trust zone at its `"data"` default and no session keying.
 
-## The shape
+**Triage is duplicated and the copies have drifted.**
+Event deduplication and the own-sender check appear in both the message path
+and the reaction path.
+The check that suppresses Filament's system notices appears only in the message
+path, so a system reaction can wake the agent where the equivalent message
+cannot.
+Nine separate log sites carry hand-written skip reasons.
 
-Every inbound event — message, reaction, backchannel command, slash command,
-synthetic greet — becomes one `InboundEvent` at the FCM boundary and runs
-through the *same* fixed sequence. Administrative traffic branches off before
-the pipeline and never enters it.
+**A sentinel stands in for normalization.**
+`_wake` distinguishes a message from a reaction by testing whether its `data`
+argument is `None`, which requires a comment explaining why an empty string is
+not the same as `None`.
+
+**Ordering rules exist only in comments.**
+Three examples: drop an event before doing any paid work; check the local
+engagement record before the API call that classifies a sender; apply session
+keying with no `await` between it and the handoff.
+Each rule is correct and each is invisible in the structure of the code.
+
+## The refactored pipeline
+
+Every inbound event becomes one `InboundEvent` at the FCM boundary and runs
+through the same six phases.
+Administrative traffic branches off before phase 1 and never enters the
+pipeline.
 
 ```python
 async def run_turn(self, event: InboundEvent) -> None:
+    # 1. Is the event worth looking at?
     if drop := triage(event, seen=self._seen, self_id=self._user_id):
-        return self._log_drop(event, drop)          # 1. worth looking at?
-    await self._server_config.sync()                #    every fresh read is after this
-    route = self.route(event)                       # 2. which mode / zone / session?
-    if route.handler is Handler.SLASH:
-        return await self._slash.run(event, route)  #    never reaches inference
-    if drop := await self.admit(event, route):      # 3. should we spend a turn?
         return self._log_drop(event, drop)
-    grant = self.grant(route)                       # 4. which tools may it use?
-    prompt = await self.assemble(event, route, grant)   # 5. build the context
-    await self.dispatch(TurnPlan(event, route, grant, prompt))   # 6. hand to Hermes
+    # Every fresh read below sees the server-held config.
+    await self._server_config.sync()
+    # 2. Which mode, zone, and session does it belong to?
+    route = self.route(event)
+    if route.handler is Handler.SLASH:
+        return await self._slash.run(event, route)   # never reaches inference
+    # 3. Is it worth spending a turn on?
+    if drop := await self.admit(event, route):
+        return self._log_drop(event, drop)
+    grant = self.grant(route)                        # 4. which tools apply?
+    prompt = await self.assemble(event, route, grant)  # 5. build context
+    await self.dispatch(                             # 6. hand off to Hermes
+        TurnPlan(event, route, grant, prompt)
+    )
 ```
 
-That function is the deliverable. Nine lines; each phase name greps to exactly
-one module.
+Each phase name resolves to one module.
 
-| Phase | I/O allowed | Returns |
-|---|---|---|
-| 1 `triage` | **none** (pure) | `None` \| `Drop(reason)` |
-| 2 `route` | file reads | `Route(zone, mode, session_scope, reply_target, handler)` |
-| 3 `admit` | ≤1 API call | `None` \| `Drop(reason)` |
-| 4 `grant` | file reads | `Grant(tools, hint)` |
-| 5 `assemble` | ≤2 API calls, concurrent | `Prompt(text, breadcrumb)` |
-| 6 `dispatch` | Hermes | — |
+Phase | Name | I/O budget | Returns
+--- | --- | --- | ---
+1 | `triage` | None | `None` or `Drop(reason)`
+2 | `route` | File reads | `Route(zone, mode, session_scope, reply_target, handler)`
+3 | `admit` | 1 API call at most | `None` or `Drop(reason)`
+4 | `grant` | File reads | `Grant(tools, hint)`
+5 | `assemble` | 2 API calls at most, run concurrently | `Prompt(text, breadcrumb)`
+6 | `dispatch` | Hands off to Hermes | Nothing
 
-The cheap-to-expensive ordering is now **structural**. "Don't spend an API call
-on a message we are going to skip" holds because `assemble` is phase 5 and
-every drop happens by phase 3. The comment can go.
+The phases run cheapest first.
+Because every drop happens by phase 3 and the only network reads are in phases
+3 and 5, an event the agent ignores costs no API calls and no file reads.
+That property currently depends on a reviewer preserving the order of
+statements inside a 150-line method.
 
-## Worked traces
+## Example traces
 
-### A. A mention in a shared channel — the happy path
+### Trace A: a mention in a shared channel
 
-`@agent what's the deploy status?` from `@alice:filament.dm` in `#eng`
-(`!eng:filament.dm`, `$evt1`, top-level, `is_mention=true`).
+Input: `@agent what's the deploy status?` from `@alice:filament.dm` in `#eng`,
+event `$evt1`, top level, with the server's mention flag set.
 
-| Phase | Decision |
-|---|---|
-| 1 triage | `$evt1` unseen ✓ · sender ≠ self ✓ · sender ≠ `@filament_god` ✓ → continue |
-| — | config sync (TTL-cached) — everything below reads fresh files |
-| 2 route | room ≠ backchannel → `zone=DATA`; no thread + `reply_style=thread` → `mode=CHANNEL`, `session_scope=("channel","!eng:filament.dm")`, reply threads off `$evt1` |
-| 3 admit | server `is_mention` → `is_agent_mention` true → wake policy admits → continue; record `$evt1` as an engaged thread |
-| 4 grant | `advanced_tool_controls` OFF (default) → `capabilities=None` (ungated), `hint=""` |
-| 5 assemble | strip mention → `what's the deploy status?` · `get_thread` for media → none · instructions + `#eng` guidance read · breadcrumb: 12 unseen → envelope |
-| 6 dispatch | `TurnContext(zone=data, caps=None, cursor_channel=!eng…, anchor=None)` → session keying → `begin_turn` → `handle_message` |
+Phase | Decision
+--- | ---
+1 `triage` | `$evt1` is unseen, the sender is not the agent, and the sender is not Filament's system user. Continue.
+— | Sync the server-held config, so every read below sees current policy.
+2 `route` | The room is not the backchannel, so the zone is data. No thread and the channel's default reply style give mode `CHANNEL`, session scope `("channel", "!eng:filament.dm")`, and a reply threaded off `$evt1`.
+3 `admit` | The mention flag admits the event under the channel's wake policy. Continue, and record `$evt1` as a thread the agent is engaged in.
+4 `grant` | The `advanced_tool_controls` flag is off, which is the default, so the turn is ungated and gets no capability hint.
+5 `assemble` | Strip the mention, look up attachments, read the standing instructions and the channel's guidance, and count unseen history. Build the envelope.
+6 `dispatch` | Activate the turn context, apply session keying, open the status turn, and call `handle_message`.
 
-### B. An `@everyone` broadcast — dropped at phase 3
+### Trace B: an @everyone broadcast, dropped at phase 3
 
-`@everyone standup in 5` in `#eng`.
+Input: `@everyone standup in 5` in `#eng`.
 
-| Phase | Decision |
-|---|---|
-| 1 triage | passes |
-| 2 route | `zone=DATA`, `mode=CHANNEL` |
-| 3 admit | `is_everyone_mention` → `is_agent_mention` returns **false** (one broadcast must not wake every agent in the channel at once) → wake policy default `mention` → `Drop("wake_policy")` |
+Phase | Decision
+--- | ---
+1 `triage` | Passes.
+2 `route` | Zone is data, mode is `CHANNEL`.
+3 `admit` | An `@everyone` mention is not a mention of the agent, because one broadcast must not wake every agent in a channel at once. The channel's default wake policy needs a mention, so the event drops with reason `wake_policy`.
 
-Nothing is fetched. No `get_thread`, no `get_recent_messages`, no instructions
-file read. Today that property depends on a reviewer honoring a comment; after
-the refactor it is a consequence of `assemble` being phase 5.
+Nothing is fetched: no attachment lookup, no history read, no instructions file
+read.
 
-### C. The agent's own 👀 marker coming back — dropped at phase 1
+### Trace C: the agent's own processing marker, dropped at phase 1
 
-The adapter added 👀 to `$evt1` while handling trace A; the reaction returns as
-a push.
+The adapter adds a 👀 reaction to `$evt1` while handling trace A, and that
+reaction arrives back as a push.
 
-| Phase | Decision |
-|---|---|
-| 1 triage | new event id, so dedupe passes → sender == self → `Drop("own_reaction")` |
+Phase | Decision
+--- | ---
+1 `triage` | The reaction is a new event, so deduplication passes, but the sender is the agent itself. Drops with reason `own_reaction`.
 
-Two independent guards catch this, both in phase 1: self-authorship, and 👀
-being in `_PROCESSING_REACTIONS` (which covers the case where a *different*
-user adds 👀 and the principal has configured it as a wake trigger). Both fire
-before any file read and before the config sync. If either were missing the
-agent would re-wake itself forever.
+Two independent guards catch this case, and both are in phase 1: the
+own-sender check, and a list of reactions the adapter itself adds.
+The second guard covers a different user adding 👀 to a channel where the
+principal configured 👀 as a wake trigger.
+If either guard were missing, the agent would wake itself in a loop.
 
-Today this trace also shows the divergence being fixed: the reaction path has
-its own copy of the dedupe and self checks but **no** `is_system_sender` check,
-so a `filament_god` reaction reaches phase 3 where the equivalent message
-would have been dropped.
+This trace also shows the drift described above.
+The reaction path has its own copy of the deduplication and own-sender checks
+but no system-notice check, so a system reaction reaches phase 3 where the
+equivalent message would already have dropped.
 
-### D. A slash command — diverted at phase 2
+### Trace D: a slash command, diverted at phase 2
 
-`/fil-config #eng wake all` in the backchannel.
+Input: `/fil-config #eng wake all` in the backchannel.
 
-| Phase | Decision |
-|---|---|
-| 1 triage | passes |
-| 2 route | room == backchannel → `zone=CONTROL`; lead-stripped body starts with `/fil-` and `slash_commands` is ON → `handler=SLASH` |
-| — | driver hands off to the slash runtime and returns |
+Phase | Decision
+--- | ---
+1 `triage` | Passes.
+2 `route` | The room is the backchannel, so the zone is control. The body starts with `/fil-` and the `slash_commands` flag is on, so the handler is `SLASH`.
+— | The pipeline hands off to the slash runtime and returns. Phases 3 through 6 do not run.
 
-Phases 3–6 never run. "A `/fil-` message must never reach inference" becomes
-one visible line in the driver instead of an early return buried 40 lines into
-`_handle_control_message`.
+Slash commands must never reach the model, in success or in failure.
+In the pipeline that rule is one line in `run_turn`, rather than an early
+return part way through the control-plane handler.
 
 ## Module layout
 
-Flat modules, not a `turn/` package: the test loaders build a fake
-`hermes_filament_fcm` module with `__path__` and pre-register submodules by
-dotted name, so a subpackage would need every test file to register
-`hermes_filament_fcm.turn` as well. Flat also matches the existing
-`slash.py` / `timeline.py` / `reactive.py`.
+Use flat modules rather than a `turn/` package.
+The test loaders build a stand-in `hermes_filament_fcm` module and register
+submodules by dotted name, so a subpackage would need extra registration in
+every test file.
+Flat modules also match the existing `slash.py`, `timeline.py`, and
+`reactive.py`.
 
-```
-adapter.py       ~450   BasePlatformAdapter: connect stages, send(), FCM callback bridge
-turn.py           ~80   run_turn — the driver + drop logging
-events.py        ~120   InboundEvent, Drop, Route, Grant, TurnPlan            (stdlib)
-triage.py         ~90   phase 1                                              (pure)
-route.py         ~140   phase 2 — absorbs keying_and_reply, conversation_key  (pure)
-admit.py         ~160   phase 3 — wake policy, mentions, engaged threads  (1 injected fetch)
-grant.py          ~90   phase 4                                              (pure)
-assemble.py      ~220   phase 5 — orchestrates framing.py + the two fetches
-dispatch.py      ~110   phase 6
-framing.py       ~200   ✅ every string the model sees                        (pure)
-turn_context.py  ~130   ✅ the per-turn authority value                       (pure)
-admin.py         ~350   ping/pong, invite, vouch, heartbeat, update check, greet
-slash_runtime.py ~180   the isinstance chain → a dispatch table
-```
+Module | Lines | Contents
+--- | --- | ---
+`adapter.py` | ~450 | Connect stages, `send()`, and the FCM callback bridge
+`turn.py` | ~80 | `run_turn` and drop logging
+`events.py` | ~120 | `InboundEvent`, `Drop`, `Route`, `Grant`, `TurnPlan`
+`triage.py` | ~90 | Phase 1
+`route.py` | ~140 | Phase 2
+`admit.py` | ~160 | Phase 3
+`grant.py` | ~90 | Phase 4
+`assemble.py` | ~220 | Phase 5
+`dispatch.py` | ~110 | Phase 6
+`framing.py` | 216 | Every string the model sees. Complete.
+`turn_context.py` | 137 | The per-turn authority value. Complete.
+`admin.py` | ~350 | Ping, invite, vouch, heartbeat, update check, greeting
+`slash_runtime.py` | ~180 | The slash result dispatch table
 
-`reactive.py` (1462 lines) wants the same treatment afterwards: `stores.py`,
-`capabilities.py` (~470 lines of bundle/resolve logic).
+`reactive.py` is 1414 lines and needs the same treatment afterwards, split into
+`stores.py` and `capabilities.py`.
 
-## The five structural moves
+## Design changes
 
-1. **One `TurnContext`, one ContextVar.** ✅ Done. A dispatch site can no
-   longer configure three-quarters of a turn.
-2. **`Drop` is a value, not a `return`.** One logging site, so the structured-log
-   reason vocabulary is a closed set and "do all paths handle every reason" is a
-   table you read rather than two functions you diff.
-3. **Triage is total and shared.** Dedupe, self-authorship, system sender and
-   the processing-reaction guard in one function over the normalized event.
-4. **The control plane goes through the pipeline too.** Control becomes
-   `Route(zone=CONTROL, mode=BACKCHANNEL)` and `assemble` branches on zone to
-   pick the framing. Deletes a whole parallel implementation of media-note +
-   breadcrumb + framing + dispatch.
-5. **`dispatch()` owns the handoff invariant.** One place, one comment:
-   `activate(context)` → `_apply_session_keying()` → `begin_turn` →
-   `handle_message`, with no `await` between the keying and the handoff.
+1.  **One turn context behind one ContextVar.**
+    Complete.
+    A dispatch site can no longer configure part of a turn's authority.
 
-A bonus falls out of move 4: `assemble`'s two fetches (media note, breadcrumb)
-become one `asyncio.gather` instead of two sequential awaits at different call
-sites.
+2.  **A drop is a value, not an early return.**
+    Each phase returns `Drop(reason)` and `run_turn` logs it in one place.
+    The set of skip reasons becomes closed and readable as a list, instead of
+    nine string literals spread across two methods.
 
-## What this buys in tests
+3.  **One shared triage function.**
+    Deduplication, the own-sender check, the system-notice check, and the
+    processing-reaction guard all run against the normalized event, so the
+    message and reaction paths cannot drift apart again.
 
-Every adapter-level test today pays ~40 lines of gateway-stub boilerplate —
-`test_thread_follow_up`, `test_slash_adapter`, `test_system_notice_skip`,
-`test_media_notes`, `test_session_keying` all carry their own copy — because
-`adapter.py` cannot be imported without Hermes. Phases 1, 2, 4 and the framing
-half of 5 are pure: they test with **zero** stubs, like `test_slash.py` and
-`test_timeline.py` already do.
+4.  **The control plane runs through the pipeline.**
+    Control becomes `Route(zone=CONTROL, mode=BACKCHANNEL)`, and `assemble`
+    selects framing by zone.
+    This deletes a parallel implementation of attachment lookup, history
+    counting, framing, and dispatch.
+    It also lets `assemble` run its two lookups concurrently, which the
+    current code cannot do because they sit in different methods.
 
-`tests/test_framing.py` (19 tests, 10 ms, no stubs) and
-`tests/test_turn_context.py` (11 tests, no stubs) are what that looks like.
-This is the real reason to do the split — it is what makes the security-relevant
-parts of this code cheap to change safely.
+5.  **`dispatch` owns the handoff.**
+    One function activates the turn context, applies session keying, opens the
+    status turn, and calls `handle_message`, in that order and with no `await`
+    between the keying and the handoff.
 
-One gotcha for future phase modules: a standalone-loaded module that defines a
-`@dataclass` must be registered in `sys.modules` **before** `exec_module`, because
-`dataclasses` resolves annotations through `sys.modules[cls.__module__]`. See the
-loader in `tests/test_turn_context.py`.
+## Testing
+
+Adapter-level tests currently carry about 40 lines of stub setup each, in five
+separate files, because `adapter.py` cannot be imported without Hermes
+installed.
+
+Phases 1, 2, and 4, and the framing part of phase 5, are pure functions.
+They test with no stubs at all, the way `slash.py` and `timeline.py` already
+do.
+`tests/test_framing.py` and `tests/test_turn_context.py` are the first two
+examples: 30 tests that each load one stdlib-only module in three lines.
+
+Caution: a module loaded standalone must be registered in `sys.modules` before
+`exec_module` if it defines a dataclass, because `dataclasses` resolves
+annotations through `sys.modules[cls.__module__]`.
+See the loader in `tests/test_turn_context.py`.
 
 ## Sequencing
 
-Not every step is equally safe, and it is worth being explicit about which kind
-each one is:
+Steps fall into three kinds, and the kind determines how each one is verified.
 
-- **Type A — provably no behavior change.** Byte-identical output, verifiable
-  by differential test against the old code.
-- **Type B — mechanical, API shape changes, behavior unchanged.** Call sites
-  move; what the model and the server see does not.
-- **Type C — deliberate behavior change.** Ships alone, with its own test.
+Kind | Meaning | Verification
+--- | --- | ---
+A | No behavior change | Differential test against the replaced code
+B | Call sites change, behavior does not | Existing suite
+C | Deliberate behavior change | Ships alone with a new test
 
-| # | Step | Kind | State |
-|---|---|---|---|
-| 1 | `framing.py` — extract every model-facing string | A | ✅ done |
-| 2 | `turn_context.py` — collapse the four ContextVars | B | ✅ done |
-| 3 | `turn.py` + `events.py` — the driver and `InboundEvent`, with each phase a shim delegating to the existing code | B | next |
-| 4 | Move the shim bodies out into `triage.py` / `route.py` / `admit.py` / `grant.py` / `assemble.py` / `dispatch.py`, one at a time | B | |
-| 5 | Route the control plane through the pipeline; delete `_handle_control_message` | B | |
-| 6 | Reaction path gains the system-notice check | **C** | |
-| 7 | Greet turn becomes a control-zone turn with session keying applied | **C** | |
-| 8 | `admin.py`; then split `reactive.py` | B | |
+Step | Description | Kind | Status
+--- | --- | --- | ---
+1 | `framing.py`: extract every model-facing string | A | Complete
+2 | `turn_context.py`: collapse the four ContextVars | B | Complete
+3 | `turn.py` and `events.py`: the driver and `InboundEvent`, with each phase a shim delegating to existing code | B | Next
+4 | Move the shim bodies into the phase modules, one at a time | B | |
+5 | Route the control plane through the pipeline and delete `_handle_control_message` | B | |
+6 | Add the system-notice check to the reaction path | C | |
+7 | Make the greeting a control-zone turn with session keying applied | C | |
+8 | `admin.py`, then split `reactive.py` | B | |
 
-### What landed in steps 1–2
+Step 3 introduces the pipeline before moving any logic into it.
+`InboundEvent` cannot be built earlier: its fields are determined by what the
+six phases consume, so defining it first means guessing the shape and then
+writing a layer inside each of the three current handlers to unpack it again.
+Both would be deleted in step 4.
 
-`framing.py` (216 lines) — the wake envelope, the control sender line,
-`sanitize_meta`, the attachment note. Verified byte-identical against the old
-inline code across 3,984 input combinations (hostile display names, multi-line
-bodies, every optional-block combination), 0 mismatches. `tests/test_framing.py`
-pins the exact bytes, including the invariant that untrusted event data is
-always last.
+Steps 6 and 7 fix the two bugs this plan identifies.
+They are deferred so that each arrives in a commit that describes it, rather
+than inside a large mechanical change.
 
-`turn_context.py` (130 lines) — eight scattered `.set()` calls became two
-`activate()` calls; ten duplicated `current_zone.get() != "control"` guards in
-`__init__.py` became `not turn_context.is_control()`. The four ContextVars are
-gone from `reactive.py`.
+## Progress
 
-Suite went 544 → 575 tests with no new stub boilerplate: 30 of the 31 new tests
-load a single stdlib-only module in three lines. `adapter.py` 2531 → 2440,
-`reactive.py` 1462 → 1414.
+Steps 1 and 2 are complete.
 
-Not fixed, on purpose: `_maybe_greet` still activates no context, so a
-backchannel greet runs `zone="data"` with no session keying. It is now one
-visibly missing line rather than four. That is step 7.
+-   `framing.py` holds the wake envelope, the control-plane sender line,
+    metadata sanitization, and the attachment note.
+    A differential test against the replaced code covered 3,984 input
+    combinations with no difference in output.
+-   `turn_context.py` replaces four ContextVars with one frozen value.
+    Two `activate()` calls replace eight scattered assignments, and ten
+    repeated zone guards in `__init__.py` now call one predicate.
+-   The suite grew from 544 to 575 tests with no new stub setup.
 
-Pre-existing and untouched: `test_plugin_manifest_version_matches_pyproject`
-fails on clean `main` (`plugin.yaml` 0.10.5 vs `pyproject.toml` 0.10.6), and
-ruff reports 10 findings in files this work did not touch.
-
-**On frontloading the mechanical moves.** Only some of them are genuinely
-self-contained. Steps 1 and 2 are, and they were worth doing first because
-`framing.py` is the safety net for everything after it and `turn_context.py`
-is what makes a forgotten dispatch decision impossible rather than merely
-unlikely.
-
-Normalizing the event into an `InboundEvent` is *not* in that category, even
-though it looks like the same kind of change. Its field set is determined by
-what the six phases consume, so doing it before the driver exists means
-guessing the shape, then writing a destructure-back layer inside each of the
-three old handlers — and deleting both when step 4 lands. Introduce the
-skeleton first (step 3, phases as delegating shims), then move code into the
-shims. That way the driver — the artifact that delivers "glance at it and
-understand the process" — exists and is reviewable from step 3 onward, and no
-code is written twice.
-
-The two Type C changes are deferred deliberately. They are the bugs this
-refactor surfaced, and each deserves a commit that says so rather than riding
-along inside a large move.
+Two known items are unchanged on purpose.
+The greeting still activates no turn context, which is step 7.
+`test_plugin_manifest_version_matches_pyproject` fails on `main` because
+`plugin.yaml` and `pyproject.toml` disagree on the version, which is unrelated
+to this work.

@@ -44,8 +44,9 @@ def test_default_is_fail_closed_for_policy_edits():
 def test_default_is_ungated_for_tools():
     """Deliberately NOT fail-closed: a plain CLI session in the same Hermes
     process must not be restricted by a Filament channel policy. Data-plane
-    fail-closure is the dispatch site's job (it always resolves an explicit
-    set), not this default's."""
+    fail-closure is the dispatch site's job, and only while the
+    advanced_tool_controls flag is on — with it off (the default) a data turn
+    is ungated too."""
     assert turn_context.current().capabilities is None
 
 
