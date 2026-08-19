@@ -29,16 +29,17 @@ turn_context = importlib.util.module_from_spec(_spec)
 sys.modules["turn_context"] = turn_context
 _spec.loader.exec_module(turn_context)
 
+Zone = turn_context.Zone
 
-# ── The fail-closed default ──────────────────────────────────────────
+
+# ── UNCLAIMED, the fail-closed default ──────────────────────────────
 
 
 def test_default_is_fail_closed_for_policy_edits():
     """A task that never dispatched a Filament turn cannot edit policy."""
     ctx = turn_context.current()
-    assert ctx.zone == "data"
-    assert ctx.is_control is False
-    assert turn_context.is_control() is False
+    assert ctx is turn_context.UNCLAIMED
+    assert ctx.zone is Zone.DATA
 
 
 def test_default_is_ungated_for_tools():
@@ -58,12 +59,27 @@ def test_default_asserts_no_cursor_and_no_anchor():
     assert ctx.reply_anchor is None
 
 
-# ── The control turn is one immutable fact ───────────────────────────
+def test_zone_stringifies_to_its_bare_value():
+    """Zone renders as "control"/"data" under %s and f-strings alike.
+
+    A str-mixin enum's inherited __str__ renders "Zone.CONTROL", and which of
+    %s and f-strings does that varies by Python version. Ten log lines
+    interpolate the zone, so turn_context overrides __str__ and this pins it.
+    """
+    for zone, text in ((Zone.CONTROL, "control"), (Zone.DATA, "data")):
+        assert str(zone) == text
+        # The logging module interpolates with %-formatting, so pin that form
+        # specifically, despite the lint preference for f-strings.
+        assert "%s" % zone == text  # noqa: UP031
+        assert f"{zone}" == text
+        assert zone == text  # the str mixin keeps plain comparison working
+
+
+# ── The control turn is one value ────────────────────────────────────
 
 
 def test_control_constant_carries_full_authority():
-    assert turn_context.CONTROL.zone == "control"
-    assert turn_context.CONTROL.is_control is True
+    assert turn_context.CONTROL.zone is Zone.CONTROL
     # Full capability (ungated), no channel's cursor to assert, nothing to
     # thread under by default.
     assert turn_context.CONTROL.capabilities is None
@@ -74,8 +90,7 @@ def test_control_constant_carries_full_authority():
 def test_activating_control_permits_policy_edits():
     async def main():
         turn_context.activate(turn_context.CONTROL)
-        assert turn_context.is_control() is True
-        assert turn_context.zone() == "control"
+        assert turn_context.current().zone is Zone.CONTROL
 
     asyncio.run(main())
 
@@ -107,8 +122,7 @@ def test_data_turn_never_yields_the_control_zone():
     ctx = turn_context.data_turn(
         capabilities=None, cursor_channel=None, reply_anchor=None
     )
-    assert ctx.zone == "data"
-    assert ctx.is_control is False
+    assert ctx.zone is Zone.DATA
 
 
 # ── Atomicity: the invariant the collapse exists to enforce ──────────
@@ -133,7 +147,7 @@ def test_a_turn_cannot_be_partly_configured():
         ctx = turn_context.current()
         # Not one field of the data turn survived.
         assert (ctx.zone, ctx.capabilities, ctx.cursor_channel, ctx.reply_anchor) == (
-            "control",
+            Zone.CONTROL,
             None,
             None,
             None,
@@ -147,7 +161,7 @@ def test_context_is_frozen_so_downstream_cannot_widen_authority():
         capabilities=frozenset({"post"}), cursor_channel=None, reply_anchor=None
     )
     for field, value in (
-        ("zone", "control"),
+        ("zone", Zone.CONTROL),
         ("capabilities", None),
         ("cursor_channel", "!x:s"),
     ):

@@ -28,7 +28,7 @@ set four ContextVars, apply session keying, open a status turn, and call
 `handle_message`.
 They do not agree.
 `_maybe_greet` sets no ContextVars at all, so a backchannel greeting runs with
-the trust zone at its `"data"` default and no session keying.
+the trust zone at its fail-closed data default and no session keying.
 
 **The cheap rejection checks are duplicated and the copies have drifted.**
 Event deduplication and the own-sender check appear in both the message path

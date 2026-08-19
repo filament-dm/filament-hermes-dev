@@ -58,6 +58,7 @@ from .server_config import ServerConfigSync, derive_tool_health
 from .setup_cli import PLUGIN_ID, _run_interactive_setup, migrate_legacy_install
 from .status import enabled as status_enabled
 from .status import pre_tool_call_hook as status_pre_tool_call
+from .turn_context import Zone
 
 logger = logging.getLogger("gateway.filament_fcm")
 
@@ -591,7 +592,7 @@ def _register_capability_gate(ctx: Any) -> None:
         logger.info(
             "filament-fcm: capability gate DENIED tool=%s (zone=%s, %d allowed)",
             tool_name,
-            turn_context.zone(),
+            turn_context.current().zone,
             len(allowed) if allowed is not None else -1,
         )
         return {
@@ -767,20 +768,29 @@ def _register_reactive_tools(
     feature_flags = FeatureFlagStore()
     channel_instructions_store = ChannelInstructionsStore()
 
-    def _deny(tool: str) -> str:
+    def _require_control(tool: str) -> str | None:
+        """Returns a refusal payload unless the calling turn is control-plane.
+
+        Args:
+            tool: The tool name, for the log lines and nothing else.
+
+        Returns:
+            A JSON error string to hand back to the model, or None to proceed.
+        """
+        zone = turn_context.current().zone
+        logger.info("filament-fcm: %s (zone=%s)", tool, zone)
+        if zone is Zone.CONTROL:
+            return None
         logger.info(
-            "filament-fcm: %s DENIED (zone=%s, not control plane)",
-            tool,
-            turn_context.zone(),
+            "filament-fcm: %s DENIED (zone=%s, not control plane)", tool, zone
         )
         return json.dumps(
             {"error": "Only available from your backchannel (control plane)."}
         )
 
     async def _set_instructions(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: set_instructions (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("set_instructions")
+        if denial := _require_control("set_instructions"):
+            return denial
         text = args.get("instructions", "") or ""
         instructions_store.write(text)
         # Mirror the local edit to the server document, rebased on the
@@ -790,15 +800,13 @@ def _register_reactive_tools(
         return json.dumps({"ok": True, "bytes": len(text)})
 
     async def _get_instructions(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: get_instructions (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("get_instructions")
+        if denial := _require_control("get_instructions"):
+            return denial
         return json.dumps({"instructions": instructions_store.read()})
 
     async def _set_wake_policy(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: set_wake_policy (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("set_wake_policy")
+        if denial := _require_control("set_wake_policy"):
+            return denial
         policy = args.get("policy")
         if not isinstance(policy, dict):
             return json.dumps(
@@ -815,9 +823,8 @@ def _register_reactive_tools(
         return json.dumps({"ok": True, "policy": policy})
 
     async def _get_wake_policy(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: get_wake_policy (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("get_wake_policy")
+        if denial := _require_control("get_wake_policy"):
+            return denial
         return json.dumps({"policy": wake_store.read()})
 
     def _available_tools_by_toolset() -> dict[str, list[str]] | None:
@@ -850,9 +857,8 @@ def _register_reactive_tools(
         )
 
     async def _get_capabilities(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: get_capabilities (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("get_capabilities")
+        if denial := _require_control("get_capabilities"):
+            return denial
         if not feature_flags.is_enabled(FEATURE_ADVANCED_TOOL_CONTROLS):
             return _feature_off_notice()
         policy = capability_store.read()
@@ -874,9 +880,8 @@ def _register_reactive_tools(
         return json.dumps(out, indent=2)
 
     async def _set_capabilities(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: set_capabilities (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("set_capabilities")
+        if denial := _require_control("set_capabilities"):
+            return denial
         if not feature_flags.is_enabled(FEATURE_ADVANCED_TOOL_CONTROLS):
             return _feature_off_notice()
         policy = args.get("policy")
@@ -895,9 +900,8 @@ def _register_reactive_tools(
         return json.dumps({"ok": True, "policy": policy})
 
     async def _get_features(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: get_features (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("get_features")
+        if denial := _require_control("get_features"):
+            return denial
         flags = feature_flags.read()
         return json.dumps(
             {
@@ -910,9 +914,8 @@ def _register_reactive_tools(
         )
 
     async def _set_feature(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: set_feature (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("set_feature")
+        if denial := _require_control("set_feature"):
+            return denial
         name = args.get("feature")
         enabled = args.get("enabled")
         if name not in KNOWN_FEATURES:
@@ -1008,9 +1011,8 @@ def _register_reactive_tools(
             feature_flags.write(value)
 
     async def _set_agent_config(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: set_agent_config (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("set_agent_config")
+        if denial := _require_control("set_agent_config"):
+            return denial
         section = args.get("section")
         if section not in _CONFIG_SECTIONS:
             return json.dumps(
@@ -1034,9 +1036,8 @@ def _register_reactive_tools(
         return json.dumps({"ok": True, "section": section})
 
     async def _get_agent_config(args: dict, **kwargs: Any) -> str:
-        logger.info("filament-fcm: get_agent_config (zone=%s)", turn_context.zone())
-        if not turn_context.is_control():
-            return _deny("get_agent_config")
+        if denial := _require_control("get_agent_config"):
+            return denial
         section = args.get("section")
         if section is None:
             return json.dumps({"config": _config_document()}, indent=2)
