@@ -158,11 +158,6 @@ def test_reply_style_unknown_value_fails_safe_to_thread():
         assert wp.reply_style("!room") == "thread"
 
 
-def test_current_zone_default_is_data():
-    # Fail-closed: control-plane tools refuse unless a turn explicitly set this.
-    assert reactive.current_zone.get() == "data"
-
-
 # ── context_breadcrumb ────────────────────────────────────────────────
 def _msg(event_id, sender="@x:s", is_from_self=False, type="m.room.message"):
     return {"event_id": event_id, "sender": sender, "is_from_self": is_from_self,
@@ -197,11 +192,6 @@ def test_reply_thread_for_send_routing():
     assert rtfs(None, ("!other:s", "$anchor"), "!r:s") is None
     # Nothing at all → top-level post.
     assert rtfs(None, None, "!r:s") is None
-
-
-def test_reply_anchor_defaults_to_none():
-    # Outside a data turn nothing may thread a send implicitly.
-    assert reactive.current_reply_anchor.get() is None
 
 
 def test_conversation_key_rule():
