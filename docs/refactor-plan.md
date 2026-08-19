@@ -94,9 +94,9 @@ Because every drop happens by phase 3 and the only network reads are in phases
 That property currently depends on a reviewer preserving the order of
 statements inside a 150-line method.
 
-### Why phases 1 and 3 are separate
+### `unconditional_filter` vs `wake_policy` filter
 
-Both phases can drop an event, so it is worth stating what divides them.
+Both phases can drop an event.
 The split is whether configuration has a say:
 
 -   **Phase 1, `unconditional_filter`.** Rules the principal cannot turn off.
