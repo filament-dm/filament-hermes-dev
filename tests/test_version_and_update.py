@@ -9,6 +9,7 @@ a declared dependency of the package): run with `uvx --with httpx pytest`.
 import asyncio
 import importlib.util
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -63,6 +64,16 @@ def test_version_from_pyproject_this_repo():
     text = (_PKG_DIR.parent / "pyproject.toml").read_text()
     got = _version.version_from_pyproject(text)
     assert got and got[0].isdigit()
+
+
+def test_plugin_manifest_version_matches_pyproject():
+    """plugin.yaml drives `hermes plugins list`; keep it aligned."""
+    root = _PKG_DIR.parent
+    expected = _version.version_from_pyproject((root / "pyproject.toml").read_text())
+    manifest = (root / "plugin.yaml").read_text()
+    match = re.search(r"^version:\s*['\"]?([^'\"\s]+)['\"]?\s*$", manifest, re.M)
+    assert match
+    assert match.group(1) == expected
 
 
 def test_version_from_pyproject_missing():
