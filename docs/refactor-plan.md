@@ -59,7 +59,7 @@ pipeline.
 ```python
 async def run_turn(self, event: InboundEvent) -> None:
     # 1. Rules no policy can override.
-    if drop := core_guards_reject(event, self._seen, self._user_id):
+    if drop := unconditional_filter(event, self._seen, self._user_id):
         return self._log_drop(event, drop)
     # Every fresh read below sees the server-held config.
     await self._server_config.sync()
@@ -68,7 +68,7 @@ async def run_turn(self, event: InboundEvent) -> None:
     if route.handler is Handler.SLASH:
         return await self._slash.run(event, route)   # never reaches inference
     # 3. Does the principal's wake policy want a turn spent here?
-    if drop := await self.wake_policy_declines(event, route):
+    if drop := await self.wake_policy(event, route):
         return self._log_drop(event, drop)
     grant = self.grant(route)                        # 4. which tools apply?
     prompt = await self.assemble(event, route, grant)  # 5. build context
@@ -81,9 +81,9 @@ Each phase name resolves to one module.
 
 Phase | Function | I/O budget | Returns
 --- | --- | --- | ---
-1 | `core_guards_reject` | None | `Drop` or `None`
+1 | `unconditional_filter` | None | `Drop` or `None`
 2 | `route` | File reads | `Route(plane, mode, session_scope, reply_target, handler)`
-3 | `wake_policy_declines` | 1 API call at most | `Drop` or `None`
+3 | `wake_policy` | 1 API call at most | `Drop` or `None`
 4 | `grant` | File reads | `Grant(tools, hint)`
 5 | `assemble` | 2 API calls at most, run concurrently | `Prompt(text, breadcrumb)`
 6 | `dispatch` | Hands off to Hermes | Nothing
@@ -97,13 +97,14 @@ statements inside a 150-line method.
 ### Why phases 1 and 3 are separate
 
 Both phases can drop an event, so it is worth stating what divides them.
-Each is named for the authority that makes its decision:
+The split is whether configuration has a say:
 
--   **Phase 1, `core_guards_reject`.** Rules the principal cannot turn off.
-    An event was already handled, the agent sent it, or Filament's system user
-    sent it.
--   **Phase 3, `wake_policy_declines`.** The principal's own per-channel
-    choice, retuned conversationally from the backchannel with no restart.
+-   **Phase 1, `unconditional_filter`.** Rules the principal cannot turn off.
+    The event was already handled, the agent sent it, or Filament's system
+    user sent it. No configuration is consulted, which is also why the phase
+    is free.
+-   **Phase 3, `wake_policy`.** The principal's own per-channel choice,
+    retuned conversationally from the backchannel with no restart.
 
 The processing-marker guard shows why the order matters rather than merely
 being tidy.
@@ -120,8 +121,9 @@ Merging them would mean either paying a config sync on every duplicate push
 and every one of the agent's own reactions, or reading policy that the sync
 has not yet refreshed.
 
-Both functions return a truthy value only when the event is dropped, so the
-call sites read the same way.
+Both functions return a `Drop` only when the event is dropped, and `None`
+otherwise, so the two call sites read the same way despite the names reading
+differently.
 
 ## Drop reasons
 
@@ -132,7 +134,7 @@ values are kept verbatim so log queries keep working.
 
 ```python
 class DropReason(StrEnum):
-    # Phase 1, core guards: rules no policy can override.
+    # Phase 1, the unconditional filter: rules no policy can override.
     DUPLICATE = "event_id_seen"
     OWN_MESSAGE = "own_message"
     OWN_REACTION = "own_reaction"
@@ -151,9 +153,9 @@ the event, which the current flat strings do not.
 
 The middle group has one member and is the reason the taxonomy has three
 groups rather than two.
-A reaction in the backchannel is not a wake signal, but it is neither a core
-guard nor a policy decision: the control plane simply has nothing to do with
-it.
+A reaction in the backchannel is not a wake signal, but it is neither an
+unconditional rule nor a policy decision: the control plane simply has nothing
+to do with it.
 That makes it a routing outcome, and phase 2 is where it belongs.
 
 `WAKE_POLICY` currently covers five distinct rules: the channel is muted, the
@@ -172,7 +174,7 @@ event `$evt1`, top level, with the server's mention flag set.
 
 Phase | Decision
 --- | ---
-1 guards | `$evt1` is unseen, the sender is not the agent, and the sender is not Filament's system user. Continue.
+1 filter | `$evt1` is unseen, the sender is not the agent, and the sender is not Filament's system user. Continue.
 — | Sync the server-held config, so every read below sees current policy.
 2 route | The room is not the backchannel, so the plane is data. No thread and the channel's default reply style give mode `CHANNEL`, session scope `("channel", "!eng:filament.dm")`, and a reply threaded off `$evt1`.
 3 wake policy | The mention flag admits the event. Continue, and record `$evt1` as a thread the agent is engaged in.
@@ -193,7 +195,7 @@ Input: `@everyone standup in 5` in `#eng`.
 
 Phase | Decision
 --- | ---
-1 guards | Passes.
+1 filter | Passes.
 2 route | Plane is data, mode is `CHANNEL`.
 3 wake policy | An `@everyone` mention is not a mention of the agent, because one broadcast must not wake every agent in a channel at once. The channel's default policy needs a mention, so the event drops with `WAKE_POLICY`.
 
@@ -207,7 +209,7 @@ reaction arrives back as a push.
 
 Phase | Decision
 --- | ---
-1 guards | The reaction is a new event, so deduplication passes, but the sender is the agent itself. Drops with `OWN_REACTION`.
+1 filter | The reaction is a new event, so deduplication passes, but the sender is the agent itself. Drops with `OWN_REACTION`.
 
 Two independent guards catch this case, and both are in phase 1: the
 own-sender check, and the list of reactions the adapter itself adds.
@@ -226,7 +228,7 @@ Input: `/fil-config #eng wake all` in the backchannel.
 
 Phase | Decision
 --- | ---
-1 guards | Passes.
+1 filter | Passes.
 2 route | The room is the backchannel, so the plane is control. The body starts with `/fil-` and the `slash_commands` flag is on, so the handler is `SLASH`.
 — | The pipeline hands off to the slash runtime and returns. Phases 3 through 6 do not run.
 
@@ -241,7 +243,7 @@ the principal listed 🔥 as a wake trigger.
 
 Phase | Decision
 --- | ---
-1 guards | The reaction is unseen, the sender is not the agent, and 🔥 is not one of the markers the adapter adds. Continue.
+1 filter | The reaction is unseen, the sender is not the agent, and 🔥 is not one of the markers the adapter adds. Continue.
 2 route | Plane is data. A reaction always anchors its reply to the message reacted to, so the reply threads off `$evt1`.
 3 wake policy | The channel lists 🔥 as a trigger. Continue.
 4 grant | As trace A.
@@ -259,7 +261,7 @@ backchannel.
 
 Phase | Decision
 --- | ---
-1 guards | Passes. The same guards apply in both planes.
+1 filter | Passes. The same guards apply in both planes.
 2 route | The room is the backchannel, so the plane is control and the mode is `BACKCHANNEL`. The body does not start with `/fil-`, so the handler is the model. The reply goes on the main timeline unless the principal wrote inside a thread.
 3 wake policy | Returns `None`. The wake policy governs shared channels only, so a control-plane command is always admitted.
 4 grant | The control plane keeps full capability, so the turn is ungated.
@@ -277,7 +279,7 @@ created, without mentioning the agent.
 
 Phase | Decision
 --- | ---
-1 guards | Passes.
+1 filter | Passes.
 2 route | Plane is data, mode is `THREAD`, session scope is `("thread", "$evt1")`. A thread turn joins the thread's conversation, not the channel's.
 3 wake policy | Not a mention. The agent's engagement record lists `$evt1` and the channel's thread waking is set to `engaged`, so classify the sender with one API call. `@carol` is not an agent, so the event is admitted.
 4–6 | As trace A.
@@ -307,9 +309,9 @@ Module | Lines | Contents
 `adapter.py` | ~450 | Connect stages, `send()`, and the FCM callback bridge
 `turn.py` | ~80 | `run_turn` and drop logging
 `events.py` | ~140 | `InboundEvent`, `Drop`, `DropReason`, `Route`, `Grant`, `TurnPlan`
-`guards.py` | ~90 | Phase 1, `core_guards_reject`
+`filters.py` | ~90 | Phase 1, `unconditional_filter`
 `route.py` | ~140 | Phase 2
-`admission.py` | ~160 | Phase 3, `wake_policy_declines`
+`admission.py` | ~160 | Phase 3, `wake_policy`
 `grant.py` | ~90 | Phase 4
 `assemble.py` | ~220 | Phase 5
 `dispatch.py` | ~110 | Phase 6
@@ -331,7 +333,7 @@ Module | Lines | Contents
     Each phase returns `Drop(reason)` and `run_turn` logs it in one place.
     See [Drop reasons](#drop-reasons).
 
-3.  **One shared set of core guards.**
+3.  **One shared unconditional filter.**
     Deduplication, the own-sender check, the system-notice check, and the
     processing-marker guard all run against the normalized event, so the
     message and reaction paths cannot drift apart again.
