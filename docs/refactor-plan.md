@@ -88,11 +88,17 @@ Phase | Function | I/O budget | Returns
 5 | `assemble` | 2 API calls at most, run concurrently | `Prompt(text, breadcrumb)`
 6 | `dispatch` | Hands off to Hermes | Nothing
 
-The phases run cheapest first.
-Because every drop happens by phase 3 and the only network reads are in phases
-3 and 5, an event the agent ignores costs no API calls and no file reads.
-That property currently depends on a reviewer preserving the order of
-statements inside a 150-line method.
+The phases run cheapest first, so what a dropped event costs depends on how
+far it got:
+
+-   Dropped by `unconditional_filter`: nothing. No configuration is read and no
+    request is made.
+-   Dropped by `wake_policy`: the config sync and the policy files needed to
+    reach that decision, plus at most one sender-classification call. No
+    message content is fetched and no turn is spent.
+
+Today that ordering is a property of where statements sit inside a 150-line
+method rather than of the structure.
 
 ### `unconditional_filter` vs `wake_policy` filter
 
@@ -106,24 +112,17 @@ The split is whether configuration has a say:
 -   **Phase 3, `wake_policy`.** The principal's own per-channel choice,
     retuned conversationally from the backchannel with no restart.
 
-The processing-marker guard shows why the order matters rather than merely
-being tidy.
-A principal may configure 👀 as a wake trigger, and the adapter adds 👀 to
-every message it handles.
-If that guard sat in phase 3, the policy would say "wake" and the agent would
-respond to its own marker in a loop.
-Phase 1 holds exactly the checks that must outrank policy.
+Order matters, not just grouping. A principal may configure 👀 as a wake
+trigger, and the adapter adds 👀 to every message it handles, so if that guard
+sat in phase 3 the policy would admit it and the agent would answer its own
+marker in a loop.
 
-The config sync between the two phases is what forces them apart.
-Phase 1 reads no configuration, so it can run before the sync; phase 3 reads
-files the sync may have just rewritten, so it must run after.
-Merging them would mean either paying a config sync on every duplicate push
-and every one of the agent's own reactions, or reading policy that the sync
+The config sync between the two phases is what forces them apart. Merging them
+would mean either syncing on every duplicate push, or reading policy the sync
 has not yet refreshed.
 
-Both functions return a `Drop` only when the event is dropped, and `None`
-otherwise, so the two call sites read the same way despite the names reading
-differently.
+Both functions return a `Drop` to mean dropped and `None` to mean continue, so
+the two call sites read the same way despite the names reading differently.
 
 ## Drop reasons
 
@@ -199,8 +198,8 @@ Phase | Decision
 2 route | Plane is data, mode is `CHANNEL`.
 3 wake policy | An `@everyone` mention is not a mention of the agent, because one broadcast must not wake every agent in a channel at once. The channel's default policy needs a mention, so the event drops with `WAKE_POLICY`.
 
-Nothing is fetched: no attachment lookup, no history read, no instructions file
-read.
+The cost is the config sync and the channel's wake policy. No attachment
+lookup, no history read, no standing instructions read, and no turn.
 
 ### Trace C: the agent's own processing marker, dropped at phase 1
 

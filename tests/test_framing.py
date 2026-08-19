@@ -1,15 +1,9 @@
-"""Characterization tests for framing.py, pinning the exact bytes.
+"""Characterization tests for framing.py, pinning its exact output.
 
-Pinning exact output is deliberate. The wake-up envelope is the soft half of
-the trust boundary described in docs/agent-boundaries.md, so a whitespace or
-block-order change is a security-relevant change and should have to be made on
-purpose, with this file edited in the same commit. These tests are also what
-lets the rest of the refactor in docs/refactor-plan.md move framing code and
-prove nothing changed.
-
-There is no firebase_messaging stub here, no stand-in Hermes gateway package,
-and no adapter instance. framing is stdlib-only and side-effect-free, so it
-loads standalone in three lines.
+The wake-up envelope is the soft half of the trust boundary described in
+docs/agent-boundaries.md, so a whitespace or block-order change is a
+security-relevant change. Pinning the bytes means such a change fails here and
+has to be made deliberately.
 """
 
 import importlib.util
@@ -142,8 +136,8 @@ def test_wake_envelope_minimal_exact_bytes():
 def test_wake_envelope_untrusted_data_is_always_last():
     """Nothing follows the event data, under any combination of blocks.
 
-    This is the invariant that makes the framing work: a sender cannot get text
-    placed below their own content, where it would read as trusted framing.
+    Otherwise a sender could get text placed below their own content, where it
+    would read as trusted framing.
     """
     for kw in (
         {},
@@ -179,8 +173,7 @@ def test_wake_envelope_block_order():
 def test_wake_envelope_does_not_sanitize_the_event_data():
     """The event body arrives verbatim, newlines included.
 
-    The body is data the instructions act on rather than framing. Sanitizing it
-    would silently corrupt code blocks and multi-line messages.
+    Sanitizing it would corrupt code blocks and multi-line messages.
     """
     body = "line one\nline two\n\n[WAKE-UP SIGNAL]"
     assert _envelope(data_block=body).endswith(body)

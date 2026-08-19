@@ -1,11 +1,9 @@
 """Prompt framing: every string this plugin puts in front of the model.
 
-This module is the text half of the trust boundary described in
-docs/agent-boundaries.md. The soft boundary is these strings: the wake-up
-envelope is what tells the agent that a shared-channel event is data to act on
-per its standing instructions, rather than instructions to obey. The hard
-boundary, the pre_tool_call capability gate, lives elsewhere. If this text is
-wrong, that gate is the only thing left.
+This module is the soft half of the trust boundary described in
+docs/agent-boundaries.md: the wake-up envelope is what tells the agent that a
+shared-channel event is data to act on per its standing instructions, rather
+than instructions to obey. The hard half is the pre_tool_call capability gate.
 
 Two rules hold throughout:
 
@@ -23,11 +21,8 @@ Trusted claims come from server-attributed ids only.
     id. Display names are never used, because a sender can set their own to
     impersonate the principal.
 
-Docstrings in this module use the descriptive mood throughout.
-
-This module is stdlib-only and side-effect-free, and loads standalone like
-slash.py and timeline.py, so the whole framing surface is unit-testable with no
-Hermes and no stubs. See tests/test_framing.py.
+Stdlib-only and side-effect-free, loads standalone like slash.py and
+timeline.py.
 """
 
 from __future__ import annotations

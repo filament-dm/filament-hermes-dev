@@ -1,14 +1,8 @@
 """Tests for turn_context.py, the per-turn authority value.
 
-Two of these were loose assertions in test_reactive.py while a turn's authority
-lived in four independent ContextVars. Collapsing them into one frozen value
-made a new invariant testable, and it is the invariant that motivated the
-change: a dispatch site cannot set part of a turn's authority. Previously a
-path that set the zone and forgot the capabilities was a silent bug, and
-_maybe_greet was exactly that. Now there is one value, so a turn either has a
-context or has the fail-closed default.
-
-turn_context is stdlib-only and loads standalone, so these tests need no stubs.
+Three properties carry the security weight and are covered here: a turn's
+authority is set whole or not at all, an unclaimed task gets the fail-closed
+zone, and concurrent turns keep separate grants.
 """
 
 import asyncio
@@ -43,12 +37,10 @@ def test_default_is_fail_closed_for_policy_edits():
 
 
 def test_default_is_ungated_for_tools():
-    """The capabilities default is ungated, deliberately not fail-closed.
+    """Ungated, deliberately not fail-closed.
 
-    A plain CLI session in the same Hermes process must not be restricted by a
-    Filament channel policy. Data-plane fail-closure is the dispatch site's
-    job, and applies only while the advanced_tool_controls flag is on. With the
-    flag off, which is the default, a data turn is ungated too.
+    A turn from outside this plugin must not be restricted by a Filament
+    channel policy. Data-plane fail-closure is the dispatch site's job.
     """
     assert turn_context.current().capabilities is None
 
@@ -60,11 +52,10 @@ def test_default_asserts_no_cursor_and_no_anchor():
 
 
 def test_zone_stringifies_to_its_bare_value():
-    """Zone renders as "control"/"data" under %s and f-strings alike.
+    """Zone renders as its bare value under every interpolation form.
 
-    A str-mixin enum's inherited __str__ renders "Zone.CONTROL", and which of
-    %s and f-strings does that varies by Python version. Ten log lines
-    interpolate the zone, so turn_context overrides __str__ and this pins it.
+    Log lines interpolate the zone, and the inherited str-mixin behavior varies
+    by Python version, so pin it.
     """
     for zone, text in ((Zone.CONTROL, "control"), (Zone.DATA, "data")):
         assert str(zone) == text
@@ -99,11 +90,7 @@ def test_activating_control_permits_policy_edits():
 
 
 def test_data_turn_requires_all_three_decisions():
-    """Every field must be passed explicitly.
-
-    For each field the safe value depends on the channel, so a caller that
-    omits one gets a TypeError rather than a quiet wrong answer.
-    """
+    """Every field must be passed explicitly, so omitting one raises."""
     for missing in ("capabilities", "cursor_channel", "reply_anchor"):
         kwargs = {
             "capabilities": frozenset({"post"}),
@@ -131,8 +118,7 @@ def test_data_turn_never_yields_the_control_zone():
 def test_a_turn_cannot_be_partly_configured():
     """Activating a context replaces every field at once.
 
-    No field can survive from a previous turn or from a dispatch path that
-    forgot to set it. This is the invariant the collapse exists to enforce.
+    No field survives from a previous turn or from a path that forgot to set it.
     """
 
     async def main():
@@ -186,11 +172,7 @@ def test_with_capabilities_copies_rather_than_mutating():
 
 
 def test_concurrent_turns_do_not_race():
-    """Task-local storage lets two channels' turns run at once.
-
-    Each turn keeps its own grant, which is what makes concurrent dispatch
-    safe.
-    """
+    """Two turns run at once, each keeping its own grant."""
 
     async def turn(name, caps, out):
         turn_context.activate(
