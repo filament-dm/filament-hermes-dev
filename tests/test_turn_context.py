@@ -1,14 +1,14 @@
-"""Tests for the per-turn context (``turn_context.py``).
+"""Tests for turn_context.py, the per-turn authority value.
 
-These were two loose assertions in ``test_reactive.py`` when the turn's
-authority lived in four independent ContextVars. Collapsing them into one
-frozen value made a new invariant testable, and it is the one that motivated
-the change: **a dispatch site cannot set part of a turn's authority.** Before,
-a path that set ``current_zone`` and forgot ``current_capabilities`` was a
-silent bug (``_maybe_greet`` was exactly that); now there is one value, so
-either the turn has a context or it has the fail-closed default.
+Two of these were loose assertions in test_reactive.py while a turn's authority
+lived in four independent ContextVars. Collapsing them into one frozen value
+made a new invariant testable, and it is the invariant that motivated the
+change: a dispatch site cannot set part of a turn's authority. Previously a
+path that set the zone and forgot the capabilities was a silent bug, and
+_maybe_greet was exactly that. Now there is one value, so a turn either has a
+context or has the fail-closed default.
 
-Stdlib-only, loads standalone, no stubs.
+turn_context is stdlib-only and loads standalone, so these tests need no stubs.
 """
 
 import asyncio
@@ -42,11 +42,13 @@ def test_default_is_fail_closed_for_policy_edits():
 
 
 def test_default_is_ungated_for_tools():
-    """Deliberately NOT fail-closed: a plain CLI session in the same Hermes
-    process must not be restricted by a Filament channel policy. Data-plane
-    fail-closure is the dispatch site's job, and only while the
-    advanced_tool_controls flag is on — with it off (the default) a data turn
-    is ungated too."""
+    """The capabilities default is ungated, deliberately not fail-closed.
+
+    A plain CLI session in the same Hermes process must not be restricted by a
+    Filament channel policy. Data-plane fail-closure is the dispatch site's
+    job, and applies only while the advanced_tool_controls flag is on. With the
+    flag off, which is the default, a data turn is ungated too.
+    """
     assert turn_context.current().capabilities is None
 
 
@@ -82,8 +84,11 @@ def test_activating_control_permits_policy_edits():
 
 
 def test_data_turn_requires_all_three_decisions():
-    """No defaults: for each field the safe value depends on the channel, so a
-    caller that forgets one gets a TypeError, not a quiet wrong answer."""
+    """Every field must be passed explicitly.
+
+    For each field the safe value depends on the channel, so a caller that
+    omits one gets a TypeError rather than a quiet wrong answer.
+    """
     for missing in ("capabilities", "cursor_channel", "reply_anchor"):
         kwargs = {
             "capabilities": frozenset({"post"}),
@@ -110,9 +115,11 @@ def test_data_turn_never_yields_the_control_zone():
 
 
 def test_a_turn_cannot_be_partly_configured():
-    """The whole point. Activating a data turn replaces every field at once,
-    so no field can be left over from a previous turn or from a path that
-    forgot to set it."""
+    """Activating a context replaces every field at once.
+
+    No field can survive from a previous turn or from a dispatch path that
+    forgot to set it. This is the invariant the collapse exists to enforce.
+    """
 
     async def main():
         turn_context.activate(
@@ -165,8 +172,11 @@ def test_with_capabilities_copies_rather_than_mutating():
 
 
 def test_concurrent_turns_do_not_race():
-    """ContextVars are task-local, which is what lets two channels' turns run
-    at once under different grants."""
+    """Task-local storage lets two channels' turns run at once.
+
+    Each turn keeps its own grant, which is what makes concurrent dispatch
+    safe.
+    """
 
     async def turn(name, caps, out):
         turn_context.activate(

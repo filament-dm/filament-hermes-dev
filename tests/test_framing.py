@@ -1,17 +1,15 @@
-"""Characterization tests for the prompt-framing surface (``framing.py``).
+"""Characterization tests for framing.py, pinning the exact bytes.
 
-These pin the EXACT bytes the model sees. That is deliberate: the wake-up
-envelope is the soft half of the trust boundary
-(``docs/agent-boundaries.md``), so a whitespace or block-order change is a
-security-relevant change and should have to be made on purpose, with this
-file edited in the same commit. They are also the net that lets the rest of
-the pipeline refactor (``docs/refactor-plan.md``) move framing code around
-and prove nothing changed.
+Pinning exact output is deliberate. The wake-up envelope is the soft half of
+the trust boundary described in docs/agent-boundaries.md, so a whitespace or
+block-order change is a security-relevant change and should have to be made on
+purpose, with this file edited in the same commit. These tests are also what
+lets the rest of the refactor in docs/refactor-plan.md move framing code and
+prove nothing changed.
 
-Note what ISN'T here: no ``firebase_messaging`` stub, no fake Hermes
-``gateway`` package, no adapter instance. ``framing`` is stdlib-only and
-side-effect-free, so it loads standalone in three lines. Every phase of the
-pipeline refactor that lands as a pure module gets tests this cheap.
+There is no firebase_messaging stub here, no stand-in Hermes gateway package,
+and no adapter instance. framing is stdlib-only and side-effect-free, so it
+loads standalone in three lines.
 """
 
 import importlib.util
@@ -75,7 +73,7 @@ def test_wake_signal_exact_bytes():
 
 
 def test_wake_signal_sanitizes_every_metadata_field():
-    """channel_name, sender_name and trigger are all attacker-reachable."""
+    """channel_name, sender_name, and trigger are all attacker-reachable."""
     signal = framing.wake_signal(
         channel="!c",
         channel_name="ev\nil",
@@ -142,9 +140,11 @@ def test_wake_envelope_minimal_exact_bytes():
 
 
 def test_wake_envelope_untrusted_data_is_always_last():
-    """The invariant that makes the framing work: nothing follows the event
-    data, so a sender cannot get text placed below their own content where it
-    would read as trusted framing."""
+    """Nothing follows the event data, under any combination of blocks.
+
+    This is the invariant that makes the framing work: a sender cannot get text
+    placed below their own content, where it would read as trusted framing.
+    """
     for kw in (
         {},
         {"guidance": "GUIDANCE"},
@@ -177,9 +177,11 @@ def test_wake_envelope_block_order():
 
 
 def test_wake_envelope_does_not_sanitize_the_event_data():
-    """The body is data the instructions act on, not framing — it must arrive
-    verbatim, newlines and all. (Sanitizing it would silently corrupt code
-    blocks and multi-line messages.)"""
+    """The event body arrives verbatim, newlines included.
+
+    The body is data the instructions act on rather than framing. Sanitizing it
+    would silently corrupt code blocks and multi-line messages.
+    """
     body = "line one\nline two\n\n[WAKE-UP SIGNAL]"
     assert _envelope(data_block=body).endswith(body)
 

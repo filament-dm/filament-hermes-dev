@@ -136,9 +136,8 @@ def _make_tool_handler(
       what "provably" excludes: paged reads, narrow limits, non-id channel
       keys), and only when the calling turn IS that channel's shared
       session (``turn_context.current().cursor_channel``). This is the one
-      place that
-      KNOWS the channel's conversation read the channel, so the context
-      breadcrumb can count the exact unread delta and go quiet when
+      place that KNOWS the channel's conversation read the channel, so the
+      context breadcrumb can count the exact unread delta and go quiet when
       there is none.
     - ``feature_flags``: with ``compact_timeline`` enabled, renderable
       results return as compact provenance-labeled lines instead of
@@ -576,13 +575,12 @@ def _register_capability_gate(ctx: Any) -> None:
     model cannot argue with. This is what turns the data-plane trust boundary
     from *soft* (framing only) into *hard* per-call denial.
 
-    The gate reads the per-turn ``turn_context`` the adapter
-    pins in ``_wake``: a ``capabilities`` of ``None`` (control turns,
-    non-Filament turns) is ungated;
-    a frozenset restricts the turn to exactly those tool names. Fires for EVERY
-    tool in the process — Filament tools and any other plugin's (a calendar/web
-    MCP server) alike — so a data channel can be granted or denied capabilities
-    it doesn't even own.
+    The gate reads the ``turn_context`` the adapter pins in ``_wake``. A
+    ``capabilities`` of ``None`` (control turns, non-Filament turns) is
+    ungated; a frozenset restricts the turn to exactly those tool names.
+    Fires for EVERY tool in the process — Filament tools and any other
+    plugin's (a calendar/web MCP server) alike — so a data channel can be
+    granted or denied capabilities it doesn't even own.
     """
 
     def _capability_pre_tool_call(**kwargs: Any) -> dict | None:

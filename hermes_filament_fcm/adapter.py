@@ -1882,11 +1882,9 @@ class FCMFilamentAdapter(BasePlatformAdapter):
             room_id=msg.room_id,
             thread_id=thread_id,
         )
-        # Mark this turn control-plane so set_instructions / set_wake_policy are
-        # permitted (they refuse from reactive turns). turn_context.CONTROL also
-        # carries the rest of a control turn's authority as one immutable fact:
-        # full capability (ungated), no channel's read cursor to assert, and no
-        # reply anchor. ContextVar is task-local.
+        # The control zone is what permits set_instructions and
+        # set_wake_policy, which refuse from a data turn. CONTROL carries the
+        # rest of a control turn's authority as one value; see turn_context.
         turn_context.activate(turn_context.CONTROL)
         # Applied synchronously right before dispatch: the base adapter
         # derives the session key at handle_message entry, so no await can
@@ -2349,19 +2347,19 @@ class FCMFilamentAdapter(BasePlatformAdapter):
                 else "one session per sender"
             ),
         )
-        # Pin this data turn's whole authority in one shot:
+        # Pin the turn's whole authority in one call. turn_context documents
+        # what each field governs; the two conditional ones are decided here.
         #
-        # - capabilities: the grant resolved above, so the pre_tool_call hook
-        #   (registered in __init__) denies any tool outside the set — hard
-        #   enforcement the data-as-data framing can't be talked out of.
-        #   Fail-closed: an unlisted channel/user got the minimal default.
-        # - cursor_channel: this turn may record a read cursor only for its own
-        #   channel, and only while shared-session keying is effective. Under
-        #   per-sender keying (or from any other channel's turn) a fetch is one
-        #   reader's, not the channel conversation's, and must not quiet the cue
-        #   for a session that never saw the messages.
-        # - reply_anchor: send() threads the reply under it; the session key
-        #   never sees it.
+        # cursor_channel stays None unless this turn IS the channel's shared
+        # session. Under per-sender keying a fetch is one reader's rather than
+        # the channel conversation's, and recording it channel-wide would quiet
+        # the unread cue for a session that never saw those messages.
+        #
+        # reply_anchor stays None when the anchor already equals the keying
+        # thread, since send() then needs no override.
+        #
+        # capabilities is the grant resolved above, which the pre_tool_call
+        # hook enforces per call.
         turn_context.activate(
             turn_context.data_turn(
                 capabilities=allowed,
